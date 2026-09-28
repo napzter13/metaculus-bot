@@ -12,11 +12,14 @@ on:
 
 jobs:
   claude:
+    # Public repo: anyone can write "@claude" in an issue or comment. Only the owner may start a
+    # turn, so a stranger's mention is skipped instead of starting a job the action then refuses.
     if: |
+      github.actor == github.repository_owner && (
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude'))))
     runs-on: ubuntu-latest
     # The only workflow here that spends on a PAID key when it runs
     # (secrets.ANTHROPIC_API_KEY), and an agent turn is exactly the shape that can

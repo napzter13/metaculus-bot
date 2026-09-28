@@ -46,15 +46,38 @@ jobs:
       # setup-uv 3s, uv sync 22s, Playwright 55s, upload 2s), so none can fire on a
       # healthy run. Receipts: scratch/residual_2026-08-24/track_c_step_timings.json.
       # setup repository with all necessary dependencies - keep as is
+      # Keyless preflight. The repo is public and a fresh clone or fork holds no secrets, so without
+      # this gate every scheduled firing would install for a minute and then fail red on a missing
+      # token. Unconfigured, the run ends GREEN with a notice, the install and bot steps are skipped
+      # and the always() upload finds no files (a no-op), so it
+      # cannot spend or publish, because nothing it would need exists. Adding the secrets arms it
+      # with no YAML change. Owner steps: docs/KIRA-SETUP.md.
+      - name: Check deployment secrets
+        id: preflight
+        timeout-minutes: 1
+        env:
+          METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OAI_ANTH_OPENROUTER_KEY: ${{ secrets.OAI_ANTH_OPENROUTER_KEY }}
+        run: |
+          if [ -n "$METACULUS_TOKEN" ] && { [ -n "$OPENROUTER_API_KEY" ] || [ -n "$OAI_ANTH_OPENROUTER_KEY" ]; }; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Bot not configured::The Metaculus token and an OpenRouter key are not both set as repository secrets, so this run forecasts, spends and publishes nothing. See docs/KIRA-SETUP.md."
+          fi
       - name: Check out repository
+        if: steps.preflight.outputs.ready == 'true'
         uses: actions/checkout@v5
         timeout-minutes: 5
       - uses: astral-sh/setup-uv@v7
+        if: steps.preflight.outputs.ready == 'true'
         timeout-minutes: 5
         with:
           enable-cache: true
           python-version: "3.12"
       - name: Install dependencies
+        if: steps.preflight.outputs.ready == 'true'
         timeout-minutes: 10
         run: uv sync --no-dev --frozen
       # Chromium for gap-fill v2's rendered-fetch rung (playwright). --with-deps
@@ -62,6 +85,7 @@ jobs:
       # degrades to plain fetch if the browser is missing, so this step is
       # belt-and-suspenders rather than run-critical.
       - name: Install Playwright Chromium
+        if: steps.preflight.outputs.ready == 'true'
         id: playwright_install
         continue-on-error: true
         # 2026-08-19: apt hung here on four runs after the Azure Ubuntu mirror failed
@@ -78,6 +102,7 @@ jobs:
         if: steps.playwright_install.outcome == 'failure'
         run: echo "::warning title=Playwright install failed::Chromium install failed — gap-fill v2 rendered-fetch rung will degrade to plain fetch this run. Transient apt/CDN blips are common; investigate only if this recurs."
       - name: Run bot
+        if: steps.preflight.outputs.ready == 'true'
         shell: bash
         # Repo is public, so uploaded artifacts are effectively public. Log content
         # (question URLs, predictions, degradation counters) is already public via

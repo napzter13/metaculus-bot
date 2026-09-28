@@ -4,6 +4,15 @@ Repo-specific context only; general coding style lives in the operator's private
 the manual: the cost gate, the overrides, the layout, the pipeline, and the standing rules whose violation is silent and
 expensive. Depth is in `docs/`, indexed by `docs/README.md`.
 
+## Fork notes (napzter13/metaculus-bot)
+
+This clone is the public fork `napzter13/metaculus-bot` (`origin`); `upstream` is No-Stream's repo.
+Three statements below are upstream's and do not hold here. Read `gh --repo No-Stream/metaculus-bot`
+as `--repo napzter13/metaculus-bot`. MiniBench is NOT disabled here: every bot workflow is enabled
+and held idle by its keyless "Check deployment secrets" step, which arms it once the secrets exist
+(docs/KIRA-SETUP.md). And commits go straight to `main` with no branches or PRs (house rule), so do
+not install the `no-commit-to-main` pre-commit hook in this clone.
+
 ## Cost gate: the operator approves every credit spend
 
 Anything hitting live LLM or research APIs spends the operator's own money, and live bot modes also publish public

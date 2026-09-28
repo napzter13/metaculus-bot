@@ -417,13 +417,15 @@ class TestDatawrapperHop:
 
         results = await fetch_resolution_sources([PAGE_URL])
 
+        expected = ["https://static.dwcdn.net/data/Aaaa1.csv", "https://static.dwcdn.net/data/Bbbb2.csv"]
         dataset_urls = [u for u in session.requested if u.startswith("https://static.dwcdn.net/")]
-        # Document order, capped at 2 — the hero/resolving chart comes first.
-        assert dataset_urls == [
-            "https://static.dwcdn.net/data/Aaaa1.csv",
-            "https://static.dwcdn.net/data/Bbbb2.csv",
-        ]
+        # The cap picks the first 2 charts in document order (the hero/resolving chart first). The two
+        # fetches are concurrent tasks behind a per-host semaphore, so the order they hit the wire is
+        # a scheduling race (it differs between Python 3.12 and 3.13); the pick is the contract.
+        assert sorted(dataset_urls) == expected
         assert len(results) == 3  # page + 2 datasets
+        # Results keep document order regardless of which fetch finished first (gather preserves it).
+        assert [r.url for r in results[1:]] == expected
         # Per-host politeness holds on the CDN host too.
         assert session.host_peak["static.dwcdn.net"] == 1
 

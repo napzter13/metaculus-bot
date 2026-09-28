@@ -8,7 +8,7 @@ need; the repo-root pointers at the bottom cover quick-start and design history.
 
 | Doc | What it covers |
 | --- | --- |
-| [KIRA-SETUP.md](KIRA-SETUP.md) | The owner's checklist for the napzter13 fork's fall 2026 season: create the repo with Actions off, the Metaculus bot account and forms, AskNews, mandatory vs optional secrets, the free-tier stopgap, which workflows to enable (MiniBench included), and the bot-maker survey. |
+| [KIRA-SETUP.md](KIRA-SETUP.md) | The owner's checklist for the public napzter13 fork's fall 2026 season: what runs with no keys (the keyless preflight gate), the Metaculus bot account and forms, AskNews, mandatory vs optional secrets, the free-tier stopgap, which workflows to keep armed (MiniBench included), and the bot-maker survey. |
 | [architecture.md](architecture.md) | How a question flows through the bot end to end: research fan-out, the forecaster ensemble, the min-forecasters guard, and aggregation (CONDITIONAL_STACKING by default, MEDIAN in prod since stacking is disabled). |
 | [research.md](research.md) | The research providers that build each question's briefing: AskNews (primary), OpenAI native search, Gemini grounded search, financial data, the prediction-market snapshot, and the resolution-source fetcher, plus the always-on gap-fill passes. All fan out in parallel and are independently env-gated. |
 | [agentic_gap_fill.md](agentic_gap_fill.md) | Gap-fill v2, the bounded agentic research loop: a driver LLM dry-runs the forecast, picks fill/verify targets, then iterates over search/fetch/read tools to produce a citation-only findings artifact. Runs alongside the v1 gap-fill pass. |
