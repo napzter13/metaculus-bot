@@ -179,8 +179,9 @@ A stopgap that lets a bot publish before it has any money. It defaults to False,
 deployment is untouched. When `FORECASTER_FREE_TIER_ENABLED` is true, `llm_configs` builds
 `FORECASTER_LLMS` from three OpenRouter `:free` slugs and `PARSER_LLM` from
 `gemma-4-31b-it:free`. A new bot account with no Metaculus-donated grant and no personal
-OpenRouter balance can then still forecast, because every call costs zero and needs only an
-`OPENROUTER_API_KEY`, which may be unfunded. It was added 2026-09-26 for the napzter13 fork, which
+OpenRouter balance can then still forecast, because the forecaster and parser calls cost zero and
+need only an `OPENROUTER_API_KEY`, which may be unfunded. Every other LLM role stays on its paid
+model (see below), so it bills whatever balance the keys hold or fails soft when they hold none. It was added 2026-09-26 for the napzter13 fork, which
 entered the fall 2026 season before its credit application was answered.
 
 It swaps both the forecasters and the parser, because a forecast whose percentiles cannot be

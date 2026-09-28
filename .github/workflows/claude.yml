@@ -12,14 +12,16 @@ on:
 
 jobs:
   claude:
-    # Public repo: anyone can write "@claude" in an issue or comment. Only the owner may start a
-    # turn, so a stranger's mention is skipped instead of starting a job the action then refuses.
+    # Public repo: anyone can write "@claude" in an issue or comment. A turn starts only when the
+    # owner both triggers the event AND wrote the text that carries the mention. The actor check
+    # alone is not enough: the owner assigning a stranger's issue (`issues: assigned`) makes the
+    # owner the actor while the prompt is the stranger's body, which is a prompt-injection path.
     if: |
       github.actor == github.repository_owner && (
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude'))))
+      (github.event_name == 'issue_comment' && github.event.comment.user.login == github.repository_owner && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && github.event.comment.user.login == github.repository_owner && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && github.event.review.user.login == github.repository_owner && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && github.event.issue.user.login == github.repository_owner && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude'))))
     runs-on: ubuntu-latest
     # The only workflow here that spends on a PAID key when it runs
     # (secrets.ANTHROPIC_API_KEY), and an agent turn is exactly the shape that can
