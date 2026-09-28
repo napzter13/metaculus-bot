@@ -154,6 +154,8 @@ session does not run them: it proposes, the operator runs and decides.
 
 ### Fall 2026 season: what was done on 2026-09-03, 2026-09-06 and 2026-09-09
 
+Upstream's record (No-Stream's bot, not the napzter13 fork, whose grant is unknown until it
+applies; docs/KIRA-SETUP.md "Cost and credits" sizes the fork against small and large grants).
 Metaculus granted $1,500 of API credits for the bot to compete in both the fall
 Metaculus Cup and the fall bot tournament. Landed in the repo:
 

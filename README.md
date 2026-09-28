@@ -99,7 +99,9 @@ make format      # ruff format + autofix
 ```
 
 Everything below costs money. A live run calls every model and research source for each new
-question, about $2.60 per question in API credits, and publishes the result to the platform. A
+question, about $2.60 per question in API credits (upstream's all-in estimate for upstream's
+roster; this fork's measured OpenRouter figure is $1.44 to $1.59, see docs/KIRA-SETUP.md "Cost and
+credits"), and publishes the result to the platform. A
 backtest replays already-resolved questions and scores the bot against the actual outcomes. It
 spends the same credits per question and publishes nothing.
 

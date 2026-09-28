@@ -132,6 +132,10 @@ jobs:
           # A repository VARIABLE (not a secret), so it flips without a commit; unset reads false.
           # docs/constants.md "forecaster_free_tier_enabled".
           FORECASTER_FREE_TIER_ENABLED: ${{ vars.FORECASTER_FREE_TIER_ENABLED || 'false' }}
+          # Cost modes (docs/KIRA-SETUP.md "Cost and credits"): text-only support roles onto a :free
+          # slug, and the donated-key early-warning floor, sized to the grant rather than upstream's.
+          SUPPORT_MODEL_ROUTE: ${{ vars.SUPPORT_MODEL_ROUTE || 'paid' }}
+          OPENROUTER_CREDIT_FLOOR_USD: ${{ vars.OPENROUTER_CREDIT_FLOOR_USD || '100' }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ASKNEWS_CLIENT_ID: ${{ secrets.ASKNEWS_CLIENT_ID }}
           ASKNEWS_SECRET: ${{ secrets.ASKNEWS_SECRET }}
@@ -145,7 +149,7 @@ jobs:
           DISABLE_AIOHTTP_TRANSPORT: 'true'
           # Native search runs in parallel with AskNews; model defaults to
           # openai/gpt-6-sol (low effort, verbosity=low, 360s) per constants.py.
-          NATIVE_SEARCH_ENABLED: 'true'
+          NATIVE_SEARCH_ENABLED: ${{ vars.NATIVE_SEARCH_ENABLED || 'true' }}
           FINANCIAL_DATA_ENABLED: 'true'
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           # SEC EDGAR fair-access contact: the User-Agent the EDGAR client sends. Unset, the
@@ -168,11 +172,11 @@ jobs:
           GEMINI_USE_DONATED_OPENROUTER_KEY: 'true'
           # Second-pass gap-fill: analyzer identifies gaps in first-pass research,
           # parallel grounded Gemini searches resolve each. Fails soft.
-          GAP_FILL_ENABLED: 'true'
+          GAP_FILL_ENABLED: ${{ vars.GAP_FILL_ENABLED || 'true' }}
           # Agentic gap-fill v2 (bounded research loop; runs concurrently with
           # v1 when both are on). ON since 2026-07-17 after smoke + blind driver
           # eval + Exa confirmation; v1 stays on for an overlap window.
-          GAP_FILL_V2_ENABLED: 'true'
+          GAP_FILL_V2_ENABLED: ${{ vars.GAP_FILL_V2_ENABLED || 'true' }}
           # Probabilistic tools post-processor: deterministic probability math
           # injected into per-forecaster rationales and the stacker's view.
           # Retired (C2): tier-2 scaffold fields no longer demanded in prompts;

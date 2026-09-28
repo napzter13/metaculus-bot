@@ -97,6 +97,25 @@ def forecaster_free_tier_enabled() -> bool:
     return env_flag_enabled(FORECASTER_FREE_TIER_ENABLED_ENV, default=False)
 
 
+def support_model_route() -> str:
+    """Where the text-only support roles run: ``paid`` (default, their configured models) or ``free``.
+
+    ``free`` moves every role in ``FREE_ROUTABLE_SUPPORT_ROLES`` onto ``FREE_TIER_SUPPORT_MODEL`` at the
+    one builder they all share (``fallback_openrouter.build_llm_with_openrouter_fallback``), so they
+    keep working on an empty OpenRouter balance. The forecasters and the web-search research roles
+    (native search, both gap-fill passes) are never moved: no free model has provider-side web
+    search. An unrecognised value RAISES rather than falling back to paid, because a typo that
+    silently spends is the failure this guard exists to prevent. Measured savings and the modes it
+    belongs to: docs/constants.md "support_model_route".
+    """
+    raw = os.getenv(SUPPORT_MODEL_ROUTE_ENV, "").strip().lower() or SUPPORT_ROUTE_PAID
+    if raw not in (SUPPORT_ROUTE_PAID, SUPPORT_ROUTE_FREE):
+        raise ValueError(
+            f"{SUPPORT_MODEL_ROUTE_ENV}={raw!r} is not one of {SUPPORT_ROUTE_PAID!r}, {SUPPORT_ROUTE_FREE!r}"
+        )
+    return raw
+
+
 class TournamentExpiredError(Exception):
     """Raised when the tournament has ended and the ID needs to be updated."""
 
@@ -231,6 +250,25 @@ DONATED_OPENROUTER_KEY_ENABLED_ENV: str = "DONATED_OPENROUTER_KEY_ENABLED"
 # Swaps the forecaster roster + parser to OpenRouter ``:free`` slugs. Receipt: docs/constants.md
 # "forecaster_free_tier_enabled".
 FORECASTER_FREE_TIER_ENABLED_ENV: str = "FORECASTER_FREE_TIER_ENABLED"
+# paid (default) | free: text-only support roles onto a :free slug. Receipt: docs/constants.md "support_model_route".
+SUPPORT_MODEL_ROUTE_ENV: str = "SUPPORT_MODEL_ROUTE"
+SUPPORT_ROUTE_PAID: str = "paid"
+SUPPORT_ROUTE_FREE: str = "free"
+# The repo's own bake-off-winning free extractor; 262k window, 32k output. Receipt: "support_model_route".
+FREE_TIER_SUPPORT_MODEL: str = "openrouter/google/gemma-4-31b-it:free"
+# Text in, text out: none needs the model's own web search. Receipt: docs/constants.md "support_model_route".
+FREE_ROUTABLE_SUPPORT_ROLES: frozenset[str] = frozenset(
+    {
+        "summarizer",
+        "parser",
+        "gap_fill_analyzer",
+        "crux_analyzer",
+        "market_ranker",
+        "market_query_author",
+        "financial_classifier",
+        "page_digest_extractor",
+    }
+)
 
 
 def env_flag_enabled(env_name: str, *, default: bool = False) -> bool:

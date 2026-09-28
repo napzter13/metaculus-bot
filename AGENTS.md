@@ -12,6 +12,8 @@ as `--repo napzter13/metaculus-bot`. MiniBench is NOT disabled here: every bot w
 and held idle by its keyless "Check deployment secrets" step, which arms it once the secrets exist
 (docs/KIRA-SETUP.md). And commits go straight to `main` with no branches or PRs (house rule), so do
 not install the `no-commit-to-main` pre-commit hook in this clone.
+Dollar figures and grants in `docs/operations.md` and `README.md` are upstream's bot's, not this
+fork's. This fork's measured costs, cost modes and credit sizing are in docs/KIRA-SETUP.md "Cost and credits".
 
 ## Cost gate: the operator approves every credit spend
 

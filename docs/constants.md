@@ -206,6 +206,29 @@ Limits: only `nemotron-3-super-120b-a12b:free` has been bake-off validated as a 
 Free slugs are rate-limited upstream and capped per day by OpenRouter. Two of the three are NVIDIA.
 Turn the flag off the day credits land.
 
+### support_model_route
+
+`SUPPORT_MODEL_ROUTE` is `paid` (the default) or `free`. Under `free`, every role in
+`FREE_ROUTABLE_SUPPORT_ROLES` is built on `FREE_TIER_SUPPORT_MODEL` (`gemma-4-31b-it:free`, the
+repo's bake-off-winning free extractor, with a 262k window and 32k output). The roles are the
+summarizer, the parser, the gap-fill analyzer, the crux analyzer, both prediction-market stages,
+the financial classifier and the page-digest extractor. The redirect sits at the one builder they
+all share, `fallback_openrouter.build_llm_with_openrouter_fallback`. It keeps each role's timeout,
+retry count and structured-output schema, so every wall and fail-soft path applies unchanged, and
+drops only the effort knobs. The substitute is a plain `GeneralLlm`, because a Google-served
+`:free` slug on the donated key answers 404. It was added 2026-09-28 for the napzter13 fork.
+
+What it is for is continuity, not savings. The ledger measurement in docs/KIRA-SETUP.md "Cost and
+credits" puts these roles at $0.07 to $0.12 a question, about 5 percent of spend. What the route
+buys is that they keep working on an empty balance. It never moves a forecaster (that is
+`forecaster_free_tier_enabled`) or a web-search role (native search, the gap-fill v1 resolver,
+the gap-fill v2 driver), because no free model has provider-side web search. An unrecognised
+value raises rather than defaulting to paid. `tests/test_support_model_route.py` pins the default
+path, the moved set, the untouched set and the role spellings.
+
+Routing the same roles to Kira's local model was sized and not built. It needs the bot to run on
+Kira, and saves about $14 a season. The reasons are in the same KIRA-SETUP section.
+
 ### check_tournament_dates
 
 Both operands go through `_as_utc` so the comparison is timezone-aware on the same side of the
@@ -325,6 +348,11 @@ two-phase retry envelope plus API time, with headroom, while still bounding a ge
 An early-warning floor for the donated key's remaining balance (`limit_remaining`). Below it,
 `cli.main` logs a loud warning and exits non-zero after all forecasting and publishing complete. It
 is a reminder to ask Metaculus for a top-up, not an abort, and not a claim that the key is empty.
+
+The $100 default was sized by upstream for upstream's $1,500 grant. The napzter13 fork reads it
+from the `OPENROUTER_CREDIT_FLOOR_USD` repository variable, falling back to 100. On a small grant,
+set it to about a week of runway (docs/KIRA-SETUP.md "Cost and credits"); otherwise a $100 grant
+sits below the floor and every run ends red from day one.
 
 Sizing: $100 is roughly 56 questions of runway. A published question costs $2.07 to $2.21 all in as
 booked ($2.00 after the ledger's non-BYOK double count is removed), of which about $1.79 draws on the

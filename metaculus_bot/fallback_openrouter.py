@@ -9,11 +9,15 @@ from forecasting_tools import GeneralLlm
 
 from metaculus_bot.constants import (
     CREDIT_ALERT_RESUME_DATE,
+    FREE_ROUTABLE_SUPPORT_ROLES,
+    FREE_TIER_SUPPORT_MODEL,
     OAI_ANTH_OPENROUTER_KEY_ENV,
     OPENROUTER_API_KEY_ENV,
+    SUPPORT_ROUTE_FREE,
     credit_alerts_active,
     donated_openrouter_key_enabled,
     gemini_use_donated_openrouter_key,
+    support_model_route,
 )
 from metaculus_bot.credit_telemetry import (
     DONATED_KEY_ALIAS,
@@ -466,6 +470,26 @@ class FallbackOpenRouterLlm(GeneralLlm):
         return await self._secondary_llm.invoke(prompt, system_prompt)
 
 
+# Effort knobs are tuned to each role's paid model; the free substitute takes its provider default.
+_FREE_SUPPORT_DROPPED_KWARGS: tuple[str, ...] = ("reasoning", "reasoning_effort", "verbosity")
+
+
+def _build_free_support_llm(role: str, **kwargs: Any) -> GeneralLlm:
+    """A text-only support role on ``FREE_TIER_SUPPORT_MODEL`` under ``SUPPORT_MODEL_ROUTE=free``.
+
+    A PLAIN ``GeneralLlm`` on the personal key: the slug is Google-served, so the donated-key wrapper
+    would claim it, and a ``:free`` variant answers 404 "no allowed providers" there. The role's
+    timeout, retry count and structured-output schema are kept, so every existing wall and fail-soft
+    path applies unchanged. Only the effort knobs are dropped.
+    """
+    kept = {k: v for k, v in kwargs.items() if k not in _FREE_SUPPORT_DROPPED_KWARGS}
+    return GeneralLlm(
+        model=FREE_TIER_SUPPORT_MODEL,
+        metadata=llm_call_metadata(role, plain_llm_key_alias(FREE_TIER_SUPPORT_MODEL)),
+        **kept,
+    )
+
+
 def build_llm_with_openrouter_fallback(model: str, *, role: str | None = None, **kwargs: Any) -> GeneralLlm:
     """
     Construct a GeneralLlm that automatically falls back from the Metaculus-donated OpenRouter
@@ -475,7 +499,13 @@ def build_llm_with_openrouter_fallback(model: str, *, role: str | None = None, *
     ``role`` names the spend line every completion of this LLM is booked under in the
     ``CREDIT_ROLE_SPEND`` ledger (``credit_telemetry.llm_call_metadata`` lists the roles in
     use). Pass it at every production call site; a missing role books as ``untagged``.
+
+    Under ``SUPPORT_MODEL_ROUTE=free`` a role in ``FREE_ROUTABLE_SUPPORT_ROLES`` is built on the free
+    support model instead (``_build_free_support_llm``); every other role, and every role on the
+    default ``paid`` route, takes the path below unchanged.
     """
+    if role in FREE_ROUTABLE_SUPPORT_ROLES and support_model_route() == SUPPORT_ROUTE_FREE:
+        return _build_free_support_llm(role, **kwargs)
     if should_route_via_donated_key(model):
         special_key = os.getenv(OAI_ANTH_OPENROUTER_KEY_ENV)
         general_key = os.getenv(OPENROUTER_API_KEY_ENV)
