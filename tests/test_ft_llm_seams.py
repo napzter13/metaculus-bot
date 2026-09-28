@@ -243,13 +243,13 @@ class TestProductionKwargShapesReachAcompletion:
 
         Roster-agnostic: iterates the live ``FORECASTER_LLMS`` singletons and asserts
         the funnel is transparent for whatever is configured. Also confirms the
-        current production reasoning/verbosity shapes are present on at least one slot
-        so this stays a meaningful pin rather than a vacuous loop, and that no slot sends
+        roster declares a reasoning shape on at least one slot (whatever its effort) so this
+        stays a meaningful pin rather than a vacuous loop, and that no slot sends
         ``verbosity`` beside ``reasoning``: on Anthropic, OpenRouter maps both onto one
         effort knob and verbosity wins, which silently ran the Opus slot at high, not xhigh.
         """
         assert FORECASTER_LLMS, "roster must be non-empty for this pin to mean anything"
-        saw_xhigh_reasoning = False
+        saw_declared_reasoning = False
 
         for llm in FORECASTER_LLMS:
             declared = llm.litellm_kwargs
@@ -263,14 +263,13 @@ class TestProductionKwargShapesReachAcompletion:
             assert sent["timeout"] == declared["timeout"]
             if "reasoning" in declared:
                 assert sent["reasoning"] == declared["reasoning"]
-                if declared["reasoning"] == _PROD_REASONING_XHIGH:
-                    saw_xhigh_reasoning = True
+                saw_declared_reasoning = True
             if "extra_body" in declared:
                 assert sent["extra_body"] == declared["extra_body"]
             sends_verbosity = "verbosity" in sent or "verbosity" in (sent.get("extra_body") or {})
             assert not ("reasoning" in sent and sends_verbosity), f"{llm.model} sends verbosity beside reasoning"
 
-        assert saw_xhigh_reasoning, "expected a forecaster with reasoning={'effort':'xhigh'} in the roster"
+        assert saw_declared_reasoning, "expected at least one forecaster declaring a reasoning effort"
 
 
 def test_no_llm_config_sends_verbosity_beside_reasoning() -> None:

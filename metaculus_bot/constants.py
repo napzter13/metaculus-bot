@@ -79,6 +79,24 @@ def donated_openrouter_key_enabled() -> bool:
     return env_flag_enabled(DONATED_OPENROUTER_KEY_ENABLED_ENV, default=True)
 
 
+def forecaster_free_tier_enabled() -> bool:
+    """Whether the forecaster roster and parser run on OpenRouter ``:free`` slugs.
+
+    Default False, so a funded deployment is untouched. True swaps ``FORECASTER_LLMS`` and
+    ``PARSER_LLM`` (llm_configs) to zero-cost ``:free`` models, which is how a bot account with no
+    donated OpenRouter grant and no personal balance can still publish a forecast. It is a
+    STOPGAP, not a roster: the free slugs are weaker, they are rate-limited at the upstream
+    provider, and OpenRouter caps free-tier requests per day. Turn it off the day credits land.
+
+    Read at import time by ``llm_configs``, unlike the call-time key toggles above, because the
+    roster is a module-level list of constructed ``GeneralLlm`` singletons. Setting it mid-process
+    therefore does nothing; the workflow env is where it belongs. Why this is a roster swap rather
+    than a third rung inside ``FallbackOpenRouterLlm``: docs/constants.md
+    "forecaster_free_tier_enabled".
+    """
+    return env_flag_enabled(FORECASTER_FREE_TIER_ENABLED_ENV, default=False)
+
+
 class TournamentExpiredError(Exception):
     """Raised when the tournament has ended and the ID needs to be updated."""
 
@@ -210,6 +228,9 @@ METACULUS_TOKEN_ENV: str = "METACULUS_TOKEN"  # noqa: S105  # env var NAME, not 
 MANTIC_TOKEN_ENV: str = "MANTIC_TOKEN"  # noqa: S105  # env var NAME, not a credential; personal, never donated
 # Master switch; a Mantic run sets it false and fails shut. Receipt: docs/constants.md "donated_openrouter_key_enabled".
 DONATED_OPENROUTER_KEY_ENABLED_ENV: str = "DONATED_OPENROUTER_KEY_ENABLED"
+# Swaps the forecaster roster + parser to OpenRouter ``:free`` slugs. Receipt: docs/constants.md
+# "forecaster_free_tier_enabled".
+FORECASTER_FREE_TIER_ENABLED_ENV: str = "FORECASTER_FREE_TIER_ENABLED"
 
 
 def env_flag_enabled(env_name: str, *, default: bool = False) -> bool:

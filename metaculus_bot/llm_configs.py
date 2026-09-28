@@ -8,6 +8,8 @@ from typing import Any
 
 from forecasting_tools import GeneralLlm
 
+from metaculus_bot.constants import forecaster_free_tier_enabled
+from metaculus_bot.credit_telemetry import llm_call_metadata, plain_llm_key_alias
 from metaculus_bot.fallback_openrouter import build_llm_with_openrouter_fallback
 
 __all__ = [
@@ -91,60 +93,99 @@ def _forecaster_slot(model: str, **kwargs: Any) -> GeneralLlm:
 # filtered per vendor prefix (openai/, anthropic/, google/, x-ai/); what to check on the
 # result is in docs/operations.md "Season-start checklist". Any change here is a config-era
 # boundary for residual analysis, so make it once, before the first question.
-FORECASTER_LLMS: list[GeneralLlm] = [
-    # 2026-07-20: forecaster roster dropped from 6 to a 3-member latest-per-vendor
-    # triple (1 OpenAI / 1 Anthropic / 1 Google). This is the SECOND roster change
-    # on 2026-07-20 and supersedes the morning fable-5 → opus-4.7 swap (7a76df6) as
-    # the config-era boundary for residual analysis. Removed: gpt-5.5,
-    # claude-opus-4.7, grok-4.5. Two adversarially-verified analyses
-    # (scratch/ensemble_3member_audit_2026-07-20/ +
-    # scratch/ensemble_power_model_2026-07-20/) found the triple non-inferior on
-    # binary/MC and only a fragile numeric lean toward the full roster (+3.24,
-    # 95% CI [-2.5, +9.1], P(loss>1pt/Q)=0.80, driven by 2 questions) — accepted as
-    # a ship-and-watch bet; see FUTURE.md "Frozen-triple numeric watch". Dropping
-    # grok (x-ai, 404s on the donated key) also ends routine personal-key forecaster
-    # spend: only the gemini-3.1-pro-preview personal-key PIN bills
-    # OPENROUTER_API_KEY now; the other two slots route via the donated key.
-    # (Dates anchor config eras for residual analysis.)
-    #
-    # OpenAI flagship (5.6 series). 2026-07-20: effort xhigh -> high. The
-    # reasoning-effort audit (scratch/reasoning_effort_audit_2026-07-20/) found
-    # default->high clearly worth it but high->xhigh UNMEASURED, so we stop paying
-    # the unmeasured premium here (the three slots measure within 12% of each other,
-    # $0.24 to $0.27 a question, 2026-09-09). opus-4.8 keeps xhigh below as the remaining premium bet
-    # (FUTURE.md "Price the high->xhigh reasoning-effort premium"). (2026-07-15
-    # had bumped this high -> xhigh.) Live-verified: OpenRouter's effort enum is
-    # max|xhigh|high|medium|low|minimal|none and this model accepts high (bogus
-    # values 400). NOTE: "max" is Anthropic-only — OpenAI's ceiling is xhigh and
-    # OpenAI rejects max upstream even though OpenRouter's enum validation admits it.
-    # 2026-09-22: sol -> gpt-6-sol (GPT-6 release) and high -> xhigh (operator), matching the
-    # Anthropic slot; a single prod-prompt timing probe checked it against FORECASTER_SOFT_DEADLINE.
-    _forecaster_slot(
-        "openrouter/openai/gpt-6-sol",
-        reasoning={"effort": "xhigh"},
-    ),
-    # Anthropic slot. 2026-07-15: enabled:True (provider-default adaptive thinking)
-    # -> explicit effort=xhigh. Anthropic also exposes "max" one tier above xhigh —
-    # held back deliberately for latency: unbounded adaptive thinking caused silent
-    # FORECASTER_SOFT_DEADLINE stalls on the retired opus-4.6 slot, e.g. Q14333 on
-    # 2026-05-07.
-    # 2026-09-22: opus-4.8 -> opus-5.5 (Anthropic release), and extra_body={"verbosity": "high"}
-    # REMOVED. On Anthropic, OpenRouter maps BOTH verbosity and reasoning.effort onto the one
-    # output_config.effort knob and "verbosity wins if both are passed" (OpenRouter Claude 4.7
-    # migration guide), so this slot had been running at effort HIGH, not the xhigh declared here,
-    # since at least 2026-02. Never send verbosity alongside reasoning.effort on an Anthropic slot.
-    _forecaster_slot(
-        "openrouter/anthropic/claude-opus-5.5",
-        reasoning={"effort": "xhigh"},
-    ),
-    # Google slot. No explicit reasoning-effort kwarg — gemini-3.1-pro-preview has
-    # no xhigh tier and uses provider defaults. PINNED to the personal
-    # OPENROUTER_API_KEY via the DONATED_KEY_BLOCKED_GOOGLE_MODELS blocklist in
-    # fallback_openrouter (the donated key routes it through a free-tier Google
-    # AI Studio BYOK integration with quota 0, so it would 429 there); see the
-    # TODO(gemini-3.1-pro-donated) tag pending the Metaculus-side BYOK fix.
-    _forecaster_slot("openrouter/google/gemini-3.1-pro-preview"),
+# --- The roster: paid track record, not latest-per-vendor ---
+#
+# 2026-09-26 (fall 2026 season start, napzter13 fork). The standing design rule above was
+# LATEST-PER-VENDOR. This roster departs from it deliberately, on the operator's instruction, and
+# selects on FutureEval PAID TRACK RECORD instead: o3, Sonnet-4.5-high and GPT-5.x-high were paid
+# in both finalized seasons, while Opus 4.6 and Gemini 3 Pro lost money. So the two loss-making
+# vendor lines are out and the three paid ones are in.
+#
+# Read this as a deliberate trade, because it is one. Against it: these are older models than the
+# ones they replace (the fork inherited gpt-6-sol / claude-opus-5.5 / gemini-3.1-pro-preview), the
+# payout record is a fact about past SEASONS rather than about these model ids in fall 2026, and
+# two of the three slots are now OpenAI, so an OpenAI outage or a shared reasoning failure takes
+# two thirds of the ensemble instead of one third. For it: the payout record is the only
+# out-of-sample evidence anyone has about this tournament's scoring, and it is the operator's call.
+# If the season's residuals disagree, that is the signal to revisit, and the revisit is a
+# config-era boundary like this one.
+#
+# CONSEQUENCE, by design and worth knowing before reading a cost report: forecaster_role() keys the
+# CREDIT_ROLE_SPEND ledger on the VENDOR, because the roster used to be one slot per vendor. With
+# two OpenAI slots, o3 and gpt-5.6-sol both book under "forecaster:openai" and their spend lines
+# merge. Nothing breaks; per-slot cost comparison just is not available for those two this season.
+#
+# MEDIAN-OF-THREE IS PRESERVED: three members, and aggregation is unchanged (MEDIAN in prod, since
+# the stacking flags are off). The support models, the stacker and its fallback are untouched.
+#
+# Live OpenRouter model-list read, 2026-09-26, per the season-start ritual above: all three slugs
+# are served, all three accept `reasoning`, and all three cap completions at or above the 64k in
+# REASONING_MODEL_CONFIG (o3 100k, claude-sonnet-4.5 64k exactly, gpt-5.6-sol 128k).
+_PAID_FORECASTER_SLOTS: list[tuple[str, dict[str, Any]]] = [
+    # OpenAI, legacy o-series. No reasoning kwarg: the track record names this slot plain "o3",
+    # not "o3-high", so it runs at the provider default (medium) rather than at an effort the
+    # payout data never measured. o3's enum stops at high; it has no xhigh or max tier.
+    ("openrouter/openai/o3", {}),
+    # Anthropic. "Sonnet-4.5-high" -> effort high, declared the only way that works on an
+    # Anthropic slot: reasoning.effort ALONE. Never add extra_body={"verbosity": ...} beside it.
+    # OpenRouter maps both onto the single output_config.effort and verbosity wins, which is how
+    # the retired opus slots silently ran at high for months while declaring xhigh (roster_history
+    # 2026-09-22). A test pins the prohibition.
+    ("openrouter/anthropic/claude-sonnet-4.5", {"reasoning": {"effort": "high"}}),
+    # OpenAI, 5.x line. "GPT-5.x-high" -> the top of the 5.x family at effort high, which is the
+    # exact configuration this repo ran in prod until the 2026-09-22 GPT-6 migration bumped it to
+    # gpt-6-sol at xhigh. Staying at high is the point: high is what was measured and paid.
+    ("openrouter/openai/gpt-5.6-sol", {"reasoning": {"effort": "high"}}),
 ]
+
+# --- Free-tier stopgap: forecasting before the donated credits land ---
+#
+# A new bot account has no Metaculus-donated OpenRouter grant and may have no personal balance, so
+# every slot above would fail on credit and the bot would publish nothing at all. Under
+# FORECASTER_FREE_TIER_ENABLED the roster swaps to OpenRouter ``:free`` slugs, which cost nothing
+# and need only a (possibly unfunded) OPENROUTER_API_KEY.
+#
+# Why a roster swap and not a third rung inside FallbackOpenRouterLlm: that wrapper is fallback
+# code on the publish critical path, and AGENTS.md allows it strictly-safer changes only. A
+# module-level swap adds no branch to any call that runs today, and with the flag off this file
+# behaves exactly as it did.
+#
+# These are PLAIN GeneralLlm instances, which _forecaster_slot already produces for them:
+# should_route_via_donated_key matches only openai/anthropic/google, so a nvidia or
+# thinkingmachines slug never touches the donated key. That is required, not incidental. Most
+# ``:free`` variants are served by providers outside the donated key's allowed list, so routing
+# them through the wrapper earns a 404 "no allowed providers", a wasted fallback attempt and a
+# bumped alert counter (ablation/forecaster_lineup.py carries the same finding).
+#
+# Chosen off the same live 2026-09-26 model-list read, which also caught that the ablation
+# harness's free lineup has rotted: minimax-m2.5:free and qwen3-next-80b-a3b-instruct:free are
+# both DELISTED from OpenRouter now, so that list could not simply be copied. All three below are
+# served, accept `reasoning`, and cap completions at or above REASONING_MODEL_CONFIG's 64k
+# (nemotron-ultra 65,536, inkling 262,144, nemotron-super 235,929).
+#
+# Honest limits, because this is a stopgap and not a roster: only nemotron-super has ever been
+# bake-off validated as a forecaster in this repo; free slugs are rate-limited at the upstream
+# provider and capped per day by OpenRouter; and two of the three are NVIDIA, so ensemble
+# diversity is thinner than the paid roster's. No effort kwarg on any of them, because none of
+# these efforts has been measured here. Turn the flag off the day credits land.
+_FREE_TIER_FORECASTER_SLOTS: list[tuple[str, dict[str, Any]]] = [
+    ("openrouter/nvidia/nemotron-3-ultra-550b-a55b:free", {}),
+    ("openrouter/thinkingmachines/inkling:free", {}),
+    # The one free model this repo has actually bake-off validated as a forecaster.
+    ("openrouter/nvidia/nemotron-3-super-120b-a12b:free", {}),
+]
+
+
+def _build_forecaster_llms() -> list[GeneralLlm]:
+    """The roster in effect: the free-tier stopgap when its flag is set, else the paid roster.
+
+    Only the selected lineup is constructed, so the unused one costs no import-time work.
+    """
+    slots = _FREE_TIER_FORECASTER_SLOTS if forecaster_free_tier_enabled() else _PAID_FORECASTER_SLOTS
+    return [_forecaster_slot(model, **kwargs) for model, kwargs in slots]
+
+
+FORECASTER_LLMS: list[GeneralLlm] = _build_forecaster_llms()
 
 
 def _forecaster_display_name(llm: GeneralLlm) -> str:
@@ -190,12 +231,35 @@ SUMMARIZER_LLM: GeneralLlm = build_llm_with_openrouter_fallback(
 # route — see the ranker cost comment below. The swap still won, by less.)
 # 2026-09-22: gpt-5.6-luna -> gpt-6-luna (GPT-6 release), now $0.10/$0.50 per 1M.
 # Effort unchanged at low.
-PARSER_LLM: GeneralLlm = build_llm_with_openrouter_fallback(
-    "openrouter/openai/gpt-6-luna",
-    role="parser",
-    reasoning={"effort": "low"},
-    **UTILITY_MODEL_CONFIG,
-)
+# 2026-09-26: the free-tier stopgap swaps this slot too, and it has to. A forecast whose
+# percentiles cannot be extracted is not a forecast, so a free roster with a paid parser still
+# publishes nothing on an unfunded key. gemma-4-31b-it:free is the repo's own bake-off winner for
+# exactly this job (8 free models tried on a real failing rationale; 3/3 pass, ~10s, deterministic,
+# all 11 percentiles interpolated in bounds - see ablation/forecaster_lineup.py FREE_PARSER_MODEL
+# for the losers and why). Its 32,768-token completion cap clears UTILITY_MODEL_CONFIG's 32k, and
+# being Google-served it would match DONATED_KEY_PROVIDERS, so unlike the free forecasters it is
+# built as a plain GeneralLlm explicitly rather than by falling through the wrapper's provider
+# check. Verified served on the live 2026-09-26 model-list read.
+_FREE_TIER_PARSER_MODEL: str = "openrouter/google/gemma-4-31b-it:free"
+
+
+def _build_parser_llm() -> GeneralLlm:
+    """The parser in effect: the free-tier model when its flag is set, else the paid Luna slot."""
+    if forecaster_free_tier_enabled():
+        return GeneralLlm(
+            model=_FREE_TIER_PARSER_MODEL,
+            metadata=llm_call_metadata("parser", plain_llm_key_alias(_FREE_TIER_PARSER_MODEL)),
+            **UTILITY_MODEL_CONFIG,
+        )
+    return build_llm_with_openrouter_fallback(
+        "openrouter/openai/gpt-6-luna",
+        role="parser",
+        reasoning={"effort": "low"},
+        **UTILITY_MODEL_CONFIG,
+    )
+
+
+PARSER_LLM: GeneralLlm = _build_parser_llm()
 # Researcher slot in the forecasting-tools LLM config dict. Effectively dead
 # code in our pipeline — we use research providers (AskNews/Gemini/native_search)
 # rather than the framework's researcher path — but the slot must be populated

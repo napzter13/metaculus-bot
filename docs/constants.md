@@ -173,6 +173,38 @@ this still reads True, in `cli._assert_personal_keys_only`.
 
 The value is read at call time rather than at import, so a workflow env change needs no re-import.
 
+### forecaster_free_tier_enabled
+
+A stopgap that lets a bot publish before it has any money. It defaults to False, so a funded
+deployment is untouched. When `FORECASTER_FREE_TIER_ENABLED` is true, `llm_configs` builds
+`FORECASTER_LLMS` from three OpenRouter `:free` slugs and `PARSER_LLM` from
+`gemma-4-31b-it:free`. A new bot account with no Metaculus-donated grant and no personal
+OpenRouter balance can then still forecast, because every call costs zero and needs only an
+`OPENROUTER_API_KEY`, which may be unfunded. It was added 2026-09-26 for the napzter13 fork, which
+entered the fall 2026 season before its credit application was answered.
+
+It swaps both the forecasters and the parser, because a forecast whose percentiles cannot be
+extracted is no forecast. Everything else stays paid: the research providers, the AskNews
+summarizer, native search and gap-fill. Without their keys or credits they degrade on their own
+(fail soft, empty return plus a loss token), so a free-tier run is thin on research by
+construction. The workflows read it as `${{ vars.FORECASTER_FREE_TIER_ENABLED || 'false' }}`, so
+the owner flips it under Settings, Secrets and variables, Actions, Variables, without a commit.
+
+It is a module-level roster swap rather than a third rung inside `FallbackOpenRouterLlm`. That
+wrapper is fallback code on the publish critical path, where AGENTS.md admits strictly-safer
+changes only, and a swap adds no branch to any call that runs today. Because the roster is a list
+of constructed singletons, the flag is read at IMPORT, unlike the call-time key toggles above, so
+setting it mid-process does nothing.
+
+The free slugs must never reach the donated key. Most `:free` variants are served by providers
+outside its allowed list and answer 404 "no allowed providers". The NVIDIA and Thinking Machines
+forecasters fall through `should_route_via_donated_key` naturally. The parser is Google-served, so
+it is built as a plain `GeneralLlm` explicitly. `tests/test_forecaster_free_tier.py` pins both.
+
+Limits: only `nemotron-3-super-120b-a12b:free` has been bake-off validated as a forecaster here.
+Free slugs are rate-limited upstream and capped per day by OpenRouter. Two of the three are NVIDIA.
+Turn the flag off the day credits land.
+
 ### check_tournament_dates
 
 Both operands go through `_as_utc` so the comparison is timezone-aware on the same side of the

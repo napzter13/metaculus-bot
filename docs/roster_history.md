@@ -55,6 +55,25 @@ summarizer in 438 s (sol 15 s, over the summarizer's 300 s wall). A blind Opus j
 brief (medium confidence) and sol's summary (concision), neither difference material, so both roles stay on sol.
 Receipts: `scratch/model_migration_2026-09-22/`.
 
+**2026-09-26 (napzter13 fork, fall 2026 season start): paid track record replaces latest-per-vendor.**
+On the owner's instruction the roster is chosen on FutureEval PAID TRACK RECORD instead of the
+latest-per-vendor rule above. o3, Sonnet-4.5-high and GPT-5.x-high were paid in both finalized
+seasons; Opus 4.6 and Gemini 3 Pro lost money. Forecaster roster: `gpt-6-sol` / `claude-opus-5.5` /
+`gemini-3.1-pro-preview` -> `openai/o3` (provider default effort, because the record names it plain
+"o3") / `anthropic/claude-sonnet-4.5` (effort `high`, reasoning only, no verbosity) /
+`openai/gpt-5.6-sol` (effort `high`, the configuration prod ran before the 2026-09-22 GPT-6 bump).
+It is still a median of three. The stacker, its fallback and every support model are unchanged. A
+live OpenRouter model-list read on 2026-09-26 confirmed all three slugs are served, accept
+`reasoning` and cap completions at or above the 64k in `REASONING_MODEL_CONFIG`.
+
+Two consequences follow. Two of the three slots are OpenAI, so vendor diversity is thinner than
+the rule intended. `forecaster_role` keys the spend ledger on the vendor, so o3 and gpt-5.6-sol
+book together under `forecaster:openai`. This is a config-era boundary; read it at the fork's
+merge-to-main timestamp, not the authoring date. The same change adds the
+`FORECASTER_FREE_TIER_ENABLED` stopgap (docs/constants.md "forecaster_free_tier_enabled"). While
+that flag is on, the published forecasts come from the free roster, a separate era of its own.
+The run logs' `Model:` lines tell the two apart.
+
 ## Support models
 
 A support model sits in one of two places, and the boundary is who builds the client. `llm_configs.py` holds the module-level `GeneralLlm` objects and config dicts, meaning every role the forecaster pipeline constructs once at import time; those are the four bullets below. `constants.py` holds a bare model-id string for each support role whose consuming module builds its own client at call time, kept beside that role's env-var name, timeout and price note; those are the list after them. The strings cannot be moved into `llm_configs.py`. `constants.py` is a foundation leaf under the pyproject import-linter contract, importing `llm_configs.py` from it is a genuine circular import through `fallback_openrouter.py`, and `llm_configs.py` reads no environment variables, which several of these roles need. `tests/test_model_name_locations.py` pins the full set of files allowed to hold a model-id literal, so neither list can quietly grow a third home.

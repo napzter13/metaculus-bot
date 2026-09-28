@@ -102,6 +102,10 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OAI_ANTH_OPENROUTER_KEY: ${{ secrets.OAI_ANTH_OPENROUTER_KEY }}
+          # Free-tier stopgap: forecasters + parser on OpenRouter :free slugs until credits land.
+          # A repository VARIABLE (not a secret), so it flips without a commit; unset reads false.
+          # docs/constants.md "forecaster_free_tier_enabled".
+          FORECASTER_FREE_TIER_ENABLED: ${{ vars.FORECASTER_FREE_TIER_ENABLED || 'false' }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ASKNEWS_CLIENT_ID: ${{ secrets.ASKNEWS_CLIENT_ID }}
           ASKNEWS_SECRET: ${{ secrets.ASKNEWS_SECRET }}
