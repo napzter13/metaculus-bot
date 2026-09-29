@@ -459,7 +459,7 @@ class TestFileModes:
 
     @staticmethod
     def _mode(path: Path) -> int:
-        return path.stat().st_mode & 0o777
+        return path.stat().st_mode & 0o7777
 
     def test_files_the_dashboard_reads_are_group_readable_even_under_a_strict_umask(self, tmp_path: Path) -> None:
         previous = os.umask(0o077)
@@ -471,9 +471,24 @@ class TestFileModes:
             for path in (sched.status_path, sched.state_path, sched.heartbeat_path, *_logs(sched, "tournament")):
                 assert self._mode(path) == 0o640, (path.name, oct(self._mode(path)))
             for directory in (sched.data_dir / "runs", sched.run_dir(sched.workflows[0]), sched.work_dir):
-                assert self._mode(directory) == 0o750, (directory.name, oct(self._mode(directory)))
+                assert self._mode(directory) == 0o2750, (directory.name, oct(self._mode(directory)))
         finally:
             os.umask(previous)
+
+    def test_new_directories_keep_the_setgid_bit_so_files_stay_in_the_group(self, tmp_path: Path) -> None:
+        parent = tmp_path / "data"
+        parent.mkdir()
+        parent.chmod(0o2750)  # what kira-earn gives the data dir
+        sched = Scheduler(
+            environ=_KEYS,
+            data_dir=parent,
+            app_dir=tmp_path / "app",
+            command_for=lambda _wf: ["true"],
+            started_at=_t(9, 0),
+        )
+        sched.startup(_t(10, 14))
+        for directory in (parent / "runs", parent / "work"):
+            assert self._mode(directory) & 0o2000, f"{directory.name} lost the setgid bit: {oct(self._mode(directory))}"
 
     def test_a_rewrite_keeps_the_mode(self, tmp_path: Path) -> None:
         target = tmp_path / "status.json"
@@ -558,6 +573,32 @@ class TestProcessGroups:
         finally:
             if self._alive(pid):
                 os.kill(pid, signal.SIGKILL)
+
+
+class TestShutdownSurvivesAStuckChild:
+    def test_a_child_that_will_not_be_reaped_still_gets_its_stop_recorded(self, tmp_path: Path) -> None:
+        sched = _make(tmp_path, code="import time\ntime.sleep(300)\n", environ=_ONLY_TOURNAMENT, stop_grace_s=1)
+        sched.startup(_t(10, 14))
+        sched.tick(_t(10, 14))
+        time.sleep(0.2)
+        proc = sched._rt["tournament"].run.proc  # type: ignore[union-attr]  # a run is in progress here
+        real_wait = proc.wait
+
+        def stuck(timeout: float | None = None) -> int:
+            raise subprocess.TimeoutExpired(cmd="uv", timeout=timeout or 0)
+
+        proc.wait = stuck  # type: ignore[method-assign]  # a D-state child: SIGKILL sent, never reaped
+        try:
+            sched.shutdown(_t(10, 15))  # must not raise
+        finally:
+            proc.wait = real_wait  # type: ignore[method-assign]
+            proc.wait(timeout=10)
+        status = _status(sched)
+        assert status["summary"] == "stopped"
+        view = status["workflows"]["tournament"]
+        assert view["running"] is False
+        assert view["error"] == "stopped by SIGTERM (scheduler shutdown)"
+        assert view["last_rc"] == -1, "an unknown exit code is recorded as -1"
 
 
 class TestQueuedSlots:

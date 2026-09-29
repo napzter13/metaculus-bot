@@ -186,8 +186,8 @@ Under `/var/lib/kira-earn/metaculus-bot/` (`$KIRA_EARN_DATA`): `status.json` (be
 `work/` (the bot's `run_logs/` and `research_outputs/`). Retention: run logs and scratch files 14
 days; the research archive (`work/research_outputs/` and `raw_research_*.jsonl`, which the sync tools
 read) 120 days, and if it passes 4 GiB the oldest files go first. Files the dashboard reads
-(`status.json`, `state.json`, `heartbeat`, the logs) are mode 0640 and the directories 0750, so group
-`kira-earn-read` can read them. A run's exit code 1 usually means the bot published and then reported degradation events
+(`status.json`, `state.json`, `heartbeat`, the logs) are mode 0640 and the directories 2750 (setgid,
+so new files stay in group `kira-earn-read`), so that group can read them. A run's exit code 1 usually means the bot published and then reported degradation events
 (the log says "Run completed with N alertable degradation event(s)"); a traceback is a real failure.
 
 ### status.json

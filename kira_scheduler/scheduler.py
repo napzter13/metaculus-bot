@@ -222,10 +222,21 @@ class Scheduler:
         for wf in self.workflows:
             run = self._rt[wf.name].run
             if run is not None:
-                self._finish(wf, run, run.proc.wait(timeout=10), now)
+                self._finish(wf, run, self._final_returncode(run), now)
         self._beat(now)
         self._write_status(now, stopped=True)
         logger.info("stopped")
+
+    @staticmethod
+    def _final_returncode(run: _Run) -> int | None:
+        """The leader's exit code, or None if it will not die (a child stuck in uninterruptible IO
+        survives SIGKILL). Shutdown must still record the run and write the final status, so that case
+        is logged and reported as an unknown code rather than raised."""
+        try:
+            return run.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            logger.error("pid %d did not exit after SIGKILL; recording the stop anyway", run.proc.pid)
+            return None
 
     def _any_group_alive(self, runs: list[_Run]) -> bool:
         alive = False

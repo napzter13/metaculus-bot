@@ -20,7 +20,8 @@ ARCHIVE_MAX_BYTES = 4 * 1024**3
 # What the dashboard (uid 1101, group kira-earn-read) needs: group-readable, never world-readable.
 # mkstemp creates 0600 whatever the umask, so this is set explicitly rather than left to it.
 FILE_MODE = 0o640
-DIR_MODE = 0o750
+# 2750: the setgid bit keeps new files in the data dir's group (kira-earn-read); a plain 0750 would clear it.
+DIR_MODE = 0o2750
 _TAIL_BYTES = 256 * 1024
 _RAW_RESEARCH_PREFIX = "raw_research_"
 
