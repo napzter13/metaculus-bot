@@ -37,7 +37,10 @@ is 1 or 2 hours ahead: the scheduler reads the clock as UTC only, and the bot ch
   program stays healthy, so the container stays healthy. The first run happens as soon as the keys
   exist, because a start (and `kira-secrets` restarts the program) catches up the latest missed slot.
 - **Never two runs of one workflow at once.** A slot that arrives mid-run is queued once and starts
-  the moment the run ends. Different workflows may overlap, as they did on Actions.
+  the moment the run ends. A queued slot only counts as handled when its run has started, so a stop
+  in between repeats it once and never twice. Different workflows may overlap, as they did on Actions.
+- **A run is stopped as a whole process group.** After a timeout, an exit or a shutdown, anything the
+  bot left running (a browser, a helper that ignores SIGTERM) is killed, so nothing outlives its run.
 - **`kira-earn restart metaculus-bot` (or a SIGTERM)** stops the run in progress cleanly, records it,
   and leaves that slot unhandled so the next start repeats it.
 - **The Cup is not run.** It is practice only; bots win nothing there.
@@ -46,7 +49,15 @@ is 1 or 2 hours ahead: the scheduler reads the clock as UTC only, and the bot ch
   files live on Kira, not in a public Actions artifact.
 - **GitHub Actions can no longer run this bot on a timer.** The `schedule:` triggers are gone from the
   three workflows. `workflow_dispatch` remains for a deliberate manual run; with no GitHub secrets
-  set it stops at "Bot not configured", so it cannot spend. Keep it that way.
+  set it stops at "Bot not configured", so it cannot spend. Keep it that way, and check it:
+
+  ```bash
+  gh secret list --repo napzter13/metaculus-bot     # must print nothing
+  ```
+
+  As a second lock, set the repository variable `KIRA_OWNS_SCHEDULE=true`. The tournament, MiniBench,
+  Mantic and Cup workflows then skip their job outright, so even a secret added to GitHub by mistake
+  cannot start a run beside Kira. (This one is a GitHub variable, the only thing here that is.)
 
 **The default mode is the zero-credit posture (M4).** These are the program's `env_defaults`; the env
 file overrides them:
@@ -172,8 +183,11 @@ no human in the loop. What this repo can say in the survey:
 
 Under `/var/lib/kira-earn/metaculus-bot/` (`$KIRA_EARN_DATA`): `status.json` (below), `state.json`
 (the scheduler's memory of handled slots and totals), `heartbeat`, `runs/<workflow>/*.log`, and
-`work/` (the bot's `run_logs/` and `research_outputs/`). Logs and work files older than 14 days are
-pruned. A run's exit code 1 usually means the bot published and then reported degradation events
+`work/` (the bot's `run_logs/` and `research_outputs/`). Retention: run logs and scratch files 14
+days; the research archive (`work/research_outputs/` and `raw_research_*.jsonl`, which the sync tools
+read) 120 days, and if it passes 4 GiB the oldest files go first. Files the dashboard reads
+(`status.json`, `state.json`, `heartbeat`, the logs) are mode 0640 and the directories 0750, so group
+`kira-earn-read` can read them. A run's exit code 1 usually means the bot published and then reported degradation events
 (the log says "Run completed with N alertable degradation event(s)"); a traceback is a real failure.
 
 ### status.json
@@ -209,9 +223,19 @@ anything: 12 runs, 23 questions, Cup, Mantic and smoke tests. Each run's role ro
 `CREDIT_RUN_SUMMARY` total to the cent. **Our roster has never run**, so its forecaster figure is
 priced from those runs' measured tokens. The inputs are thin (7 questions on today's support
 models, 16 on the previous ones), so read every figure as plus or minus 25 percent.
-Once your own bot has run, re-measure with `make sync_telemetry ARGS="--repo napzter13/metaculus-bot"`
-then `make cost_report`. Both are free and read-only, and cost_report prints the same per-role
-dollars and tokens per question.
+Once your own bot has run, re-measure from a copy of its data dir. The sync tools read an artifact
+store, and `scripts/import_kira_runs.py` fills it from Kira's run logs and research files:
+
+```bash
+docker cp kira-earn:/var/lib/kira-earn/metaculus-bot ./kira-data     # on Kira, then bring it here
+uv run python scripts/import_kira_runs.py --data-dir ./kira-data
+make sync_telemetry ARGS="--from-store"
+make cost_report
+```
+
+All of it is free and read-only, and cost_report prints the same per-role dollars and tokens per
+question. `make sync_all ARGS="--from-store"` folds in the research archive as well. Run the import at
+least every 14 days: Kira prunes run logs at 14 days, and the store is the durable copy.
 
 ### Where the money goes today
 

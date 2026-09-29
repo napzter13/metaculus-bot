@@ -26,7 +26,7 @@ import pytest
 from kira_scheduler import scheduler as scheduler_module
 from kira_scheduler.scheduler import Scheduler
 from kira_scheduler.spec import MODE_DEFAULTS, WORKFLOWS
-from kira_scheduler.store import prune_old, write_json_atomic
+from kira_scheduler.store import prune_old, prune_work, write_json_atomic
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _OK_LINE = "CREDIT_RUN_SUMMARY: n_questions=3 charged_usd=0.1234 usd_per_question=0.0411"
@@ -355,20 +355,20 @@ class TestStatusFile:
 
 
 class TestRetentionAndOrphans:
-    def test_logs_and_work_files_older_than_14_days_are_pruned_on_start(self, tmp_path: Path) -> None:
+    def test_logs_and_scratch_files_older_than_14_days_are_pruned_on_start(self, tmp_path: Path) -> None:
         sched = _make(tmp_path)
         old_log = sched.data_dir / "runs" / "tournament" / "20260101T000000Z.log"
         fresh_log = sched.data_dir / "runs" / "tournament" / "20260928T000000Z.log"
-        old_research = sched.data_dir / "work" / "research_outputs" / "old.jsonl"
-        for path in (old_log, fresh_log, old_research):
+        old_scratch = sched.data_dir / "work" / "cache" / "old.tmp"
+        for path in (old_log, fresh_log, old_scratch):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("x")
         long_ago = time.time() - 15 * 86400
-        for path in (old_log, old_research):
+        for path in (old_log, old_scratch):
             os.utime(path, (long_ago, long_ago))
         sched.startup(_t(10, 14))
         assert not old_log.exists()
-        assert not old_research.exists()
+        assert not old_scratch.exists()
         assert fresh_log.exists()
 
     def test_prune_leaves_files_at_13_days(self, tmp_path: Path) -> None:
@@ -395,6 +395,221 @@ class TestRetentionAndOrphans:
         finally:
             if orphan.poll() is None:
                 orphan.kill()
+
+
+class TestResearchArchiveRetention:
+    """research_outputs/ and raw_research_*.jsonl were 90 day Actions artifacts the sync tools pulled."""
+
+    @staticmethod
+    def _age(path: Path, days: float) -> None:
+        stamp = time.time() - days * 86400
+        os.utime(path, (stamp, stamp))
+
+    def _files(self, work: Path) -> dict[str, Path]:
+        paths = {
+            "research": work / "research_outputs" / "research_x.jsonl",
+            "raw": work / "run_logs" / "raw_research_kira-tournament-x.jsonl",
+            "other_run_log": work / "run_logs" / "other.log",
+        }
+        for path in paths.values():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("x" * 10)
+        return paths
+
+    def test_the_archive_outlives_14_days_but_not_120(self, tmp_path: Path) -> None:
+        work = tmp_path / "work"
+        paths = self._files(work)
+        for path in paths.values():
+            self._age(path, 100)
+        prune_work(work)
+        assert paths["research"].exists()
+        assert paths["raw"].exists()
+        assert not paths["other_run_log"].exists(), "only the archive earns the longer retention"
+        for name in ("research", "raw"):
+            self._age(paths[name], 130)
+        prune_work(work)
+        assert not paths["research"].exists()
+        assert not paths["raw"].exists()
+
+    def test_a_size_bound_drops_the_oldest_archive_files_first(self, tmp_path: Path) -> None:
+        work = tmp_path / "work"
+        files = []
+        for i, age in enumerate((50, 40, 30, 20)):
+            path = work / "research_outputs" / f"research_{i}.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("x" * 100)
+            self._age(path, age)
+            files.append(path)
+        prune_work(work, max_archive_bytes=250)  # 400 bytes on disk: the two oldest have to go
+        assert [p.exists() for p in files] == [False, False, True, True]
+
+    def test_a_run_never_deletes_the_archive_early(self, tmp_path: Path) -> None:
+        sched = _make(tmp_path, environ=_ONLY_TOURNAMENT)
+        archive = sched.data_dir / "work" / "research_outputs" / "research_old.jsonl"
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        archive.write_text("{}")
+        self._age(archive, 60)
+        sched.startup(_t(10, 14))
+        _settle(sched, _t(10, 14))
+        assert archive.exists()
+
+
+class TestFileModes:
+    """mkstemp makes 0600 whatever the umask; the dashboard (another uid, shared group) needs 0640."""
+
+    @staticmethod
+    def _mode(path: Path) -> int:
+        return path.stat().st_mode & 0o777
+
+    def test_files_the_dashboard_reads_are_group_readable_even_under_a_strict_umask(self, tmp_path: Path) -> None:
+        previous = os.umask(0o077)
+        try:
+            sched = _make(tmp_path, code=f"print({_OK_LINE!r})", environ=_ONLY_TOURNAMENT)
+            sched.startup(_t(10, 14))
+            _settle(sched, _t(10, 14))
+            sched.tick(_t(10, 15))
+            for path in (sched.status_path, sched.state_path, sched.heartbeat_path, *_logs(sched, "tournament")):
+                assert self._mode(path) == 0o640, (path.name, oct(self._mode(path)))
+            for directory in (sched.data_dir / "runs", sched.run_dir(sched.workflows[0]), sched.work_dir):
+                assert self._mode(directory) == 0o750, (directory.name, oct(self._mode(directory)))
+        finally:
+            os.umask(previous)
+
+    def test_a_rewrite_keeps_the_mode(self, tmp_path: Path) -> None:
+        target = tmp_path / "status.json"
+        write_json_atomic(target, {"n": 1})
+        write_json_atomic(target, {"n": 2})
+        assert self._mode(target) == 0o640
+
+
+class TestProcessGroups:
+    """SIGKILL to the group only lands while a member lives, so the leader exiting must not end the hunt."""
+
+    _SPAWN = (
+        "import os, subprocess, sys, time\n"
+        "pidfile = sys.argv[1] + '.gc'\n"
+        "grandchild = 'import os, signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        'open(sys.argv[1], "w").write(str(os.getpid())); time.sleep(300)\'\n'
+        "subprocess.Popen([sys.executable, '-c', grandchild, pidfile])\n"
+        "while not os.path.exists(pidfile):\n"
+        "    time.sleep(0.02)\n"
+    )
+
+    @staticmethod
+    def _alive(pid: int) -> bool:
+        try:
+            state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+        except OSError:
+            return False
+        return state != "Z"
+
+    def _grandchild(self, tmp_path: Path) -> int:
+        pidfile = Path(str(tmp_path / "flag") + ".gc")
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not (pidfile.exists() and pidfile.read_text()):
+            time.sleep(0.02)
+        return int(pidfile.read_text())
+
+    @staticmethod
+    def _gone(pid: int, alive: Any) -> bool:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and alive(pid):
+            time.sleep(0.05)
+        return not alive(pid)
+
+    def test_a_grandchild_that_ignores_sigterm_does_not_survive_the_timeout(self, tmp_path: Path) -> None:
+        wf = dataclasses.replace(WORKFLOWS[0], run_timeout_s=60)
+        sched = _make(
+            tmp_path, code=self._SPAWN + "time.sleep(300)\n", environ=_ONLY_TOURNAMENT, workflows=(wf,), kill_grace_s=0
+        )
+        sched.startup(_t(10, 14))
+        sched.tick(_t(10, 14))
+        pid = self._grandchild(tmp_path)
+        try:
+            sched.tick(_t(10, 15, 1))  # timeout: SIGTERM ends the leader, the grandchild ignores it
+            _settle(sched, _t(10, 15, 2))
+            assert self._gone(pid, self._alive), "the SIGTERM-ignoring grandchild outlived the run"
+        finally:
+            if self._alive(pid):
+                os.kill(pid, signal.SIGKILL)
+
+    def test_a_grandchild_that_ignores_sigterm_does_not_survive_shutdown(self, tmp_path: Path) -> None:
+        sched = _make(tmp_path, code=self._SPAWN + "time.sleep(300)\n", environ=_ONLY_TOURNAMENT, stop_grace_s=1)
+        sched.startup(_t(10, 14))
+        sched.tick(_t(10, 14))
+        pid = self._grandchild(tmp_path)
+        try:
+            sched.shutdown(_t(10, 15))
+            assert self._gone(pid, self._alive), "shutdown returned with the grandchild still running"
+            assert _status(sched)["summary"] == "stopped"
+        finally:
+            if self._alive(pid):
+                os.kill(pid, signal.SIGKILL)
+
+    def test_a_grandchild_left_behind_by_a_normal_exit_is_killed(self, tmp_path: Path) -> None:
+        sched = _make(tmp_path, code=self._SPAWN, environ=_ONLY_TOURNAMENT)  # the leader exits 0 at once
+        sched.startup(_t(10, 14))
+        sched.tick(_t(10, 14))
+        pid = self._grandchild(tmp_path)
+        try:
+            _settle(sched, _t(10, 14))
+            assert _status(sched)["workflows"]["tournament"]["last_rc"] == 0
+            assert self._gone(pid, self._alive), "a helper outlived the run that started it"
+        finally:
+            if self._alive(pid):
+                os.kill(pid, signal.SIGKILL)
+
+
+class TestQueuedSlots:
+    """A slot that arrives mid-run is queued; it is handled only when a run for it has started."""
+
+    _WAIT = TestOverlap._WAIT
+
+    def test_a_queued_slot_is_not_marked_handled_while_it_waits(self, tmp_path: Path) -> None:
+        sched = _make(tmp_path, code=self._WAIT, environ=_ONLY_TOURNAMENT)
+        sched.startup(_t(10, 14))
+        sched.tick(_t(10, 14))
+        sched.tick(_t(10, 23))
+        state = json.loads(sched.state_path.read_text())
+        assert state["workflows"]["tournament"]["handled_slot"] == "2026-09-29T10:03:00Z"
+        (tmp_path / "flag").write_text("go")
+        _settle(sched, _t(10, 24))
+        state = json.loads(sched.state_path.read_text())
+        assert state["workflows"]["tournament"]["handled_slot"] == "2026-09-29T10:23:00Z"
+
+    def test_a_stop_during_the_first_run_repeats_the_latest_slot_exactly_once(self, tmp_path: Path) -> None:
+        first = _make(tmp_path, code=self._WAIT, environ=_ONLY_TOURNAMENT)
+        first.startup(_t(10, 14))
+        first.tick(_t(10, 14))
+        first.tick(_t(10, 23))  # queued behind the run in progress
+        time.sleep(0.2)
+        first.shutdown(_t(10, 24))
+        assert len(_logs(first, "tournament")) == 1, "the queued slot must not start during shutdown"
+        (tmp_path / "flag").write_text("go")
+        second = _make(tmp_path, environ=_ONLY_TOURNAMENT)
+        second.startup(_t(10, 25))
+        _settle(second, _t(10, 25))
+        _settle(second, _t(10, 26))
+        assert len(_logs(second, "tournament")) == 2, "one interrupted run plus exactly one catch-up, no slot twice"
+
+    def test_an_interrupted_queued_run_leaves_its_slot_unhandled(self, tmp_path: Path) -> None:
+        first = _make(tmp_path, code=self._WAIT, environ=_ONLY_TOURNAMENT)
+        first.startup(_t(10, 14))
+        first.tick(_t(10, 14))
+        first.tick(_t(10, 23))  # queue slot 10:23 behind the 10:03 run
+        (tmp_path / "flag").write_text("go")
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and len(_logs(first, "tournament")) < 2:
+            first.tick(_t(10, 24))  # the first run ends, the queued run starts
+            time.sleep(0.02)
+        (tmp_path / "flag").unlink()  # the second run must block, so the stop lands mid-run
+        assert len(_logs(first, "tournament")) == 2
+        time.sleep(0.2)
+        first.shutdown(_t(10, 24, 30))
+        state = json.loads(first.state_path.read_text())
+        assert state["workflows"]["tournament"]["handled_slot"] == "2026-09-29T10:03:00Z", (
+            "the queued run was interrupted, so its slot (10:23) must be repeated at the next start"
+        )
 
 
 class TestShutdown:

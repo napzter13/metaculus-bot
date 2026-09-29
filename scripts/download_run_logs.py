@@ -31,6 +31,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from kira_scheduler.runid import kira_workflow
 from scripts.gha_artifacts import (
     GH_API_TIMEOUT_S,
     add_store_arguments,
@@ -182,6 +183,8 @@ def infer_workflow(artifact_name: str, run_id: int, workflow_map: dict[int, str]
     mapped = workflow_map.get(run_id)
     if mapped:
         return mapped
+    if kira := kira_workflow(run_id):  # a run imported from Kira (scripts/import_kira_runs.py) names its workflow
+        return kira
     if artifact_name.startswith("logs-"):
         return "test_bot"
     return "unknown"

@@ -383,6 +383,35 @@ class TestKiraSchedulerCadence:
         assert len(minutes) == len(set(minutes)), sorted(minutes)
 
 
+class TestKiraOwnsTheSchedule:
+    """With ``KIRA_OWNS_SCHEDULE=true`` the workflows that could run the bot refuse to.
+
+    The bot runs on Kira (kira_scheduler). The tournament, MiniBench and Mantic workflows have no cron,
+    but a manual dispatch could still run one, and the Cup keeps its schedule. The operator sets the
+    repository variable and every one of them skips its job, so Actions can never spend beside Kira
+    even if a secret is added to GitHub by mistake.
+    """
+
+    _GUARDED = (
+        ".github/workflows/run_bot_on_tournament.yaml",
+        ".github/workflows/run_bot_on_minibench.yaml",
+        ".github/workflows/run_bot_on_mantic.yaml",
+        ".github/workflows/run_bot_on_metaculus_cup.yaml",
+    )
+
+    @pytest.mark.parametrize("rel_path", _GUARDED)
+    def test_the_job_is_skipped_when_the_variable_is_true(self, rel_path: str) -> None:
+        job = _workflow(rel_path)["jobs"]["forecast_job"]
+        assert job.get("if") == "${{ vars.KIRA_OWNS_SCHEDULE != 'true' }}"
+
+    def test_every_workflow_that_spends_on_a_schedule_or_dispatch_is_guarded(self) -> None:
+        # The two test workflows are dispatch-only smoke runs an operator starts on purpose; every other
+        # bot workflow that can run the bot must carry the guard.
+        assert sorted(self._GUARDED) == sorted(rel for rel in _BOT_WORKFLOWS if "test_bot" not in rel), (
+            "a new bot workflow needs the KIRA_OWNS_SCHEDULE guard, or an explicit exemption here"
+        )
+
+
 class TestFetchDiagnosticCannotSpend:
     """The one non-bot workflow anybody may dispatch is exempt from the cost gate for a reason.
 

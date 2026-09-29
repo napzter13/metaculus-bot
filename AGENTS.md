@@ -15,6 +15,8 @@ Several statements below are upstream's and do not hold here:
   any more, only `workflow_dispatch`, so Actions can never spend beside Kira. Read "any bot workflow
   run or dispatch" in the cost gate as "the Kira scheduler firing" plus a manual dispatch.
 - **Never `gh secret set` for this bot.** Keys live on Kira (`kira-secrets`); GitHub holds code and CI.
+  `gh secret list --repo napzter13/metaculus-bot` must print nothing, and with the repository variable
+  `KIRA_OWNS_SCHEDULE=true` the four bot workflows that could run it skip their job.
 - Read `gh --repo No-Stream/metaculus-bot` as `--repo napzter13/metaculus-bot`. MiniBench is not
   disabled here: it runs whenever its gate keys exist (docs/KIRA-SETUP.md).
 - Commits go straight to `main` with no branches or PRs (house rule), so do not install the

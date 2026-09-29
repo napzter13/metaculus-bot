@@ -62,6 +62,7 @@ class _Run:
 class _Runtime:
     run: _Run | None = None
     pending: bool = False
+    queued_slot: datetime | None = None  # the slot waiting behind a run; NOT yet handled
     notified: datetime | None = None
 
 
@@ -151,7 +152,7 @@ class Scheduler:
     # ---- lifecycle ----------------------------------------------------------------------------
     def startup(self, now: datetime) -> None:
         for sub in ("runs", "work"):
-            (self.data_dir / sub).mkdir(parents=True, exist_ok=True)
+            store.ensure_dir(self.data_dir / sub)
         loaded = store.read_json(self.state_path)
         if isinstance(loaded.get("workflows"), dict):
             self._state = {"schema": 1, "workflows": loaded["workflows"]}
@@ -185,27 +186,53 @@ class Scheduler:
         if self._dirty or self._last_status is None or (now - self._last_status).total_seconds() >= STATUS_INTERVAL_S:
             self._write_status(now)
 
+    @staticmethod
+    def _group_alive(pgid: int) -> bool:
+        """Whether any process is left in the group. ``killpg(pgid, 0)`` sees zombies, so the leader
+        must be reaped (``poll``) first or it would hold the group open."""
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
     def shutdown(self, now: datetime) -> None:
-        """SIGTERM every child group, wait ``stop_grace_s``, SIGKILL what is left, record all of it."""
+        """SIGTERM every child group, wait ``stop_grace_s`` for the WHOLE group, SIGKILL what is left.
+
+        Waiting on the group and not just the leader is what catches a grandchild that ignores
+        SIGTERM: the leader (``uv``) exits, but the group is not empty until its members are gone.
+        """
         self._stopping = True
-        live = [(wf, rt.run) for wf in self.workflows if (rt := self._rt[wf.name]).run is not None]
-        for _, run in live:
-            if run is not None:
-                run.reason = "shutdown"
-                self._signal_group(run.proc, signal.SIGTERM)
+        live = [run for wf in self.workflows if (run := self._rt[wf.name].run) is not None]
+        for run in live:
+            run.reason = "shutdown"
+            self._signal_group(run.proc, signal.SIGTERM)
         deadline = time.monotonic() + self.stop_grace_s
-        while time.monotonic() < deadline and any(run is not None and run.proc.poll() is None for _, run in live):
+        while time.monotonic() < deadline and self._any_group_alive(live):
             time.sleep(0.05)
-        for _, run in live:
-            if run is not None and run.proc.poll() is None:
+        for run in live:
+            run.proc.poll()
+            if self._group_alive(run.proc.pid):
                 self._signal_group(run.proc, signal.SIGKILL)
-                run.proc.wait()
-        for wf, run in live:
+        settle = time.monotonic() + 5
+        while time.monotonic() < settle and self._any_group_alive(live):
+            time.sleep(0.02)
+        for wf in self.workflows:
+            run = self._rt[wf.name].run
             if run is not None:
-                self._finish(wf, run, run.proc.returncode, now)
+                self._finish(wf, run, run.proc.wait(timeout=10), now)
         self._beat(now)
         self._write_status(now, stopped=True)
         logger.info("stopped")
+
+    def _any_group_alive(self, runs: list[_Run]) -> bool:
+        alive = False
+        for run in runs:
+            run.proc.poll()  # reap the leader; a zombie leader would keep its group "alive"
+            alive = self._group_alive(run.proc.pid) or alive
+        return alive
 
     # ---- firing -------------------------------------------------------------------------------
     def _consider(self, wf: Workflow, now: datetime) -> None:
@@ -229,18 +256,22 @@ class Scheduler:
         if handled is not None and handled >= slot:
             return
         if rt.run is not None:
-            rt.pending = True
-            self._wstate(wf)["handled_slot"] = store.iso(slot)
-            self._save_state()
-            logger.info("%s: slot %s arrived while a run is in progress; queued behind it", wf.name, store.iso(slot))
+            # Queued in memory only. Marking the slot handled here would let an interrupted queued run
+            # count as done; left unhandled, the run that starts for it records the slot itself.
+            if rt.queued_slot != slot:
+                rt.queued_slot = slot
+                rt.pending = True
+                logger.info(
+                    "%s: slot %s arrived while a run is in progress; queued behind it", wf.name, store.iso(slot)
+                )
             return
         self._start(wf, now, slot)
 
     def _start(self, wf: Workflow, now: datetime, slot: datetime) -> None:
         stamp = _stamp(now)
         log_dir = self.run_dir(wf)
-        log_dir.mkdir(parents=True, exist_ok=True)
-        self.work_dir.mkdir(parents=True, exist_ok=True)
+        store.ensure_dir(log_dir)
+        store.ensure_dir(self.work_dir)
         log_path = log_dir / f"{stamp}.log"
         suffix = 1
         while log_path.exists():
@@ -251,6 +282,7 @@ class Scheduler:
         state = self._wstate(wf)
         prev_handled = self._handled(wf)
         handle = log_path.open("ab")
+        store.set_file_mode(log_path)
         handle.write(f"# kira-earn {PROGRAM_NAME} {wf.name} slot={store.iso(slot)} started={store.iso(now)}\n".encode())
         handle.flush()
         state["handled_slot"] = store.iso(slot)
@@ -280,6 +312,7 @@ class Scheduler:
             return
         state["pid"] = proc.pid
         state["last_interrupted"] = False
+        self._rt[wf.name].queued_slot = None
         self._save_state()
         self._rt[wf.name].run = _Run(proc, log_path, handle, now, slot, prev_handled)
         logger.info("%s: run started for slot %s (pid %d, log %s)", wf.name, store.iso(slot), proc.pid, log_path.name)
@@ -313,6 +346,9 @@ class Scheduler:
                 self._signal_group(run.proc, signal.SIGKILL)
 
     def _finish(self, wf: Workflow, run: _Run, rc: int | None, now: datetime) -> None:
+        # The leader is gone but a grandchild (a browser, a helper) may not be, and SIGKILL to the group
+        # only lands while some member lives, so send it now, whatever the exit reason was.
+        self._signal_group(run.proc, signal.SIGKILL)
         run.log_handle.close()
         summary = store.summarize_log(run.log_path)
         state = self._wstate(wf)
@@ -378,14 +414,13 @@ class Scheduler:
     def _prune(self) -> None:
         for wf in self.workflows:
             store.prune_old(self.run_dir(wf), suffix=".log")
-        store.prune_old(self.work_dir)
+        store.prune_work(self.work_dir)
 
     # ---- heartbeat and status -----------------------------------------------------------------
     def _beat(self, now: datetime) -> None:
         self._last_beat = now
         self._dirty = True  # status.json carries this heartbeat, so it is rewritten with it
-        self.heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
-        self.heartbeat_path.write_text(f"{_epoch(now)}\n", encoding="utf-8")
+        store.write_text_atomic(self.heartbeat_path, f"{_epoch(now)}\n")
 
     def _workflow_view(self, wf: Workflow, now: datetime) -> dict[str, Any]:
         state = self._wstate(wf)

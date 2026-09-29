@@ -28,6 +28,10 @@ concurrency:
 # Daily job to run the simple forecast bot
 jobs:
   forecast_job:
+    # Refuse to run when Kira owns the schedule. The repository variable KIRA_OWNS_SCHEDULE=true is set
+    # by the operator once this bot runs on Kira (docs/KIRA-SETUP.md), so neither a dispatch nor an
+    # old cron can start a second, spending run beside it. The job is skipped, not failed.
+    if: ${{ vars.KIRA_OWNS_SCHEDULE != 'true' }}
     runs-on: ubuntu-latest # determines the machine that will run the job - keep as is
     # Backstop only; the per-step caps below are the real hang defense. Sized above the
     # bot's OWN contract rather than off the measured distribution: constants.py caps a

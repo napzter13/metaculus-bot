@@ -10,7 +10,11 @@ from pathlib import Path
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_REQUIRED = ["kira-earn.json", "kira_scheduler/__main__.py", "kira_scheduler/scheduler.py", "kira_scheduler/spec.py"]
+_REQUIRED = [
+    "kira-earn.json",
+    *(f"kira_scheduler/{name}.py" for name in ("__main__", "env", "runid", "scheduler", "slots", "spec", "store")),
+    "scripts/import_kira_runs.py",
+]
 
 
 @pytest.mark.parametrize("rel_path", _REQUIRED)
