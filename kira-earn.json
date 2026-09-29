@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "name": "metaculus-bot",
+  "uid": 1103,
+  "runtime": "python",
+  "setup": [
+    ["uv", "sync", "--frozen", "--no-dev"],
+    ["sh", "-c", "uv run --frozen --no-dev playwright install chromium || echo 'playwright install failed: the rendered-fetch rung degrades to plain fetch'"]
+  ],
+  "run": ["uv", "run", "--frozen", "--no-dev", "python", "-m", "kira_scheduler"],
+  "env_required": [
+    {"name": "METACULUS_TOKEN", "where": "metaculus.com > Settings > My Forecasting Bots > Create a Bot, copy the API key", "gate": true},
+    {"name": "OPENROUTER_API_KEY", "where": "openrouter.ai > Settings > Keys > Create Key (it may stay unfunded: the free tier needs a key too)", "gate": true}
+  ],
+  "env_optional": [
+    {"name": "OAI_ANTH_OPENROUTER_KEY", "where": "the OpenRouter key Metaculus emails you after the credit application (forms.gle/aQdYMq9Pisrf1v7d8)"},
+    {"name": "ASKNEWS_CLIENT_ID", "where": "my.asknews.app > Settings > API credentials"},
+    {"name": "ASKNEWS_SECRET", "where": "my.asknews.app > Settings > API credentials"},
+    {"name": "GEMINI_API_KEY", "where": "aistudio.google.com > Get API key (Google AI Studio); also set GEMINI_SEARCH_ENABLED=true"},
+    {"name": "EXA_API_KEY", "where": "exa.ai dashboard > API keys (not covered by donated credits)"},
+    {"name": "PERPLEXITY_API_KEY", "where": "perplexity.ai > Settings > API"},
+    {"name": "FRED_API_KEY", "where": "fred.stlouisfed.org > My Account > API Keys"},
+    {"name": "SEC_EDGAR_CONTACT_EMAIL", "where": "any real contact email; sent as the SEC EDGAR User-Agent"},
+    {"name": "OPENAI_API_KEY", "where": "platform.openai.com > API keys (the roster goes through OpenRouter and does not use it)"},
+    {"name": "ANTHROPIC_API_KEY", "where": "console.anthropic.com > API keys (the roster goes through OpenRouter and does not use it)"},
+    {"name": "MANTIC_TOKEN", "where": "competitions.mantic.com bot token; arms the mantic workflow, about $3 per question on your OpenRouter key, and it ignores the zero-credit mode flags"},
+    {"name": "WORKFLOW_TOURNAMENT_ENABLED", "where": "a switch, not a key: true or false (default true)"},
+    {"name": "WORKFLOW_MINIBENCH_ENABLED", "where": "a switch, not a key: true or false (default true)"},
+    {"name": "WORKFLOW_MANTIC_ENABLED", "where": "a switch, not a key: true or false (default true, idle until MANTIC_TOKEN exists)"},
+    {"name": "FORECASTER_FREE_TIER_ENABLED", "where": "cost mode flag, default true: three free forecasters. Set false once credits land"},
+    {"name": "SUPPORT_MODEL_ROUTE", "where": "cost mode flag, default free: text-only support roles on a free model (paid = their own models)"},
+    {"name": "GAP_FILL_ENABLED", "where": "cost mode flag, default false: paid gap-fill v1 research (about $0.35 to $0.57 a question)"},
+    {"name": "GAP_FILL_V2_ENABLED", "where": "cost mode flag, default false: paid agentic gap-fill v2 research (about $0.22 to $0.45 a question)"},
+    {"name": "NATIVE_SEARCH_ENABLED", "where": "cost mode flag, default false: paid provider-native web search (about $0.13 to $0.22 a question)"},
+    {"name": "GEMINI_SEARCH_ENABLED", "where": "cost mode flag, default false: Gemini grounded search, needs GEMINI_API_KEY"},
+    {"name": "OPENROUTER_CREDIT_FLOOR_USD", "where": "early-warning balance in dollars, default 15 (upstream used 100 for a $1,500 grant)"}
+  ],
+  "env_defaults": {
+    "FORECASTER_FREE_TIER_ENABLED": "true",
+    "SUPPORT_MODEL_ROUTE": "free",
+    "GAP_FILL_ENABLED": "false",
+    "GAP_FILL_V2_ENABLED": "false",
+    "NATIVE_SEARCH_ENABLED": "false",
+    "GEMINI_SEARCH_ENABLED": "false",
+    "OPENROUTER_CREDIT_FLOOR_USD": "15"
+  },
+  "money": false,
+  "armed_default": true,
+  "litellm": false,
+  "ports": [],
+  "mem_mb": 8192,
+  "nice": 10,
+  "heartbeat": {"file": "heartbeat", "max_age_s": 900},
+  "stop_wait_s": 90,
+  "status_file": "status.json"
+}

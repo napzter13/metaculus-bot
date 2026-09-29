@@ -891,6 +891,12 @@ CRPS and is no better than median on binary.
 
 ## GitHub Actions workflows
 
+> **napzter13 fork: the schedules below moved to Kira.** In this fork the tournament, MiniBench and
+> Mantic workflows have no `schedule:` block (only `workflow_dispatch`); the bot runs as the
+> `metaculus-bot` program of kira-earn, whose scheduler (`kira_scheduler/`) fires the same commands
+> at the same UTC minutes (tournament :03/:23/:43, MiniBench :08/:38, Mantic :05/:15/:25). Read this
+> section as upstream's history of the Actions setup; docs/KIRA-SETUP.md is current for the fork.
+
 Six bot workflows live in `.github/workflows/`. They share the same setup
 (checkout, `uv sync --no-dev --frozen`, install Playwright Chromium), the same env
 block (the Mantic one differs only in its keys; see "Mantic" below), and a `timeout-minutes` job cap

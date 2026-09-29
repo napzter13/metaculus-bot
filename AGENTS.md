@@ -7,14 +7,21 @@ expensive. Depth is in `docs/`, indexed by `docs/README.md`.
 ## Fork notes (napzter13/metaculus-bot)
 
 This clone is the public fork `napzter13/metaculus-bot` (`origin`); `upstream` is No-Stream's repo.
-Three statements below are upstream's and do not hold here. Read `gh --repo No-Stream/metaculus-bot`
-as `--repo napzter13/metaculus-bot`. MiniBench is NOT disabled here: it and the tournament are enabled
-and held idle by the keyless "Check deployment secrets" step, which arms them once the secrets
-exist; the Cup workflow is disabled (practice only). Cost-mode repository variables are set to the
-zero-credit posture (docs/KIRA-SETUP.md). And commits go straight to `main` with no branches or PRs (house rule), so do
-not install the `no-commit-to-main` pre-commit hook in this clone.
-Dollar figures and grants in `docs/operations.md` and `README.md` are upstream's bot's, not this
-fork's. This fork's measured costs, cost modes and credit sizing are in docs/KIRA-SETUP.md "Cost and credits".
+Several statements below are upstream's and do not hold here:
+
+- **The bot runs on Kira, not on GitHub Actions.** It is the `metaculus-bot` program of the
+  `kira-earn` container (contract: `/projects/kira-earn/SPEC.md`; manifest: `kira-earn.json`; the
+  scheduler: `kira_scheduler/`). The tournament, MiniBench and Mantic workflows have no `schedule:`
+  any more, only `workflow_dispatch`, so Actions can never spend beside Kira. Read "any bot workflow
+  run or dispatch" in the cost gate as "the Kira scheduler firing" plus a manual dispatch.
+- **Never `gh secret set` for this bot.** Keys live on Kira (`kira-secrets`); GitHub holds code and CI.
+- Read `gh --repo No-Stream/metaculus-bot` as `--repo napzter13/metaculus-bot`. MiniBench is not
+  disabled here: it runs whenever its gate keys exist (docs/KIRA-SETUP.md).
+- Commits go straight to `main` with no branches or PRs (house rule), so do not install the
+  `no-commit-to-main` pre-commit hook in this clone.
+- Dollar figures and grants in `docs/operations.md` and `README.md` are upstream's bot's, not this
+  fork's. This fork's measured costs, cost modes and credit sizing are in docs/KIRA-SETUP.md
+  "Cost and credits".
 
 ## Cost gate: the operator approves every credit spend
 

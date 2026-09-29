@@ -58,6 +58,8 @@ scripts/research_sync/*.plist
 !tests/data/**/*.json
 # The residual round's curated correlation-cluster tables: package data, not an analysis dump.
 !metaculus_bot/performance_analysis/cluster_tables.json
+# The kira-earn manifest is the contract with the Kira runtime: a checkout without it cannot be installed.
+!/kira-earn.json
 
 # Merge / rebase leftovers
 *.orig

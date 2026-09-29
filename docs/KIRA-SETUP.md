@@ -1,76 +1,87 @@
-# Kira setup: the napzter13 fork in the fall 2026 season
+# Kira setup: metaculus-bot on Kira (program of kira-earn)
 
-The owner's checklist for running [napzter13/metaculus-bot](https://github.com/napzter13/metaculus-bot)
-unattended on GitHub Actions in the Fall 2026 FutureEval bot tournament (project 33121, opened
-2026-09-28) and MiniBench. The repo is public, for the open-source credit bonus. `origin` is the
-fork, and `upstream` is No-Stream/metaculus-bot, kept for pulling fixes.
+**What you do, five lines:**
+
+1. Make the accounts on the websites: a Metaculus bot (token), an OpenRouter key, AskNews credentials (details below).
+2. Fill in the Metaculus participation and credit form: https://forms.gle/aQdYMq9Pisrf1v7d8
+3. On Kira run `ssh -tt kira kira-secrets`, pick `metaculus-bot`, and paste each key. Nothing is echoed.
+4. Tell @kira_earnings_bot: `check metaculus`.
+5. That is all. The program restarts itself when its keys change. It forecasts at $0 until a grant lands.
+
+This bot runs on Kira, not on GitHub Actions. It is the `metaculus-bot` program (uid 1103) of the
+one `kira-earn` container, under the contract in `/projects/kira-earn/SPEC.md`. The repo is public
+([napzter13/metaculus-bot](https://github.com/napzter13/metaculus-bot)) for the open-source credit
+bonus; `origin` is the fork and `upstream` is No-Stream/metaculus-bot, kept for pulling fixes. GitHub
+holds the code and CI only. Never run `gh secret set` for this bot: the keys live on Kira in
+`/srv/kira-earn/env/metaculus-bot.env`, written by `kira-secrets`.
 
 Facts about the competition were read on 2026-09-29 from the FutureEval participate page and the
 [Resources page](https://www.metaculus.com/notebooks/38928/futureeval-resources-page/) (notebook
 38928, last edited 2026-09-28). Where this doc and that page disagree, the page wins.
 
-## Where things stand (no owner keys yet)
+## What runs
 
-| Workflow | State | With no secrets |
-|---|---|---|
-| `ci.yaml` (lint, tests, gitleaks secret scan, osv audit) | active, every push to `main` | runs fully, green; needs no keys |
-| `run_bot_on_tournament.yaml` | active, cron :03 / :23 / :43 hourly | green no-op: preflight finds no secrets, posts a notice, skips install and the bot step |
-| `run_bot_on_minibench.yaml` | active, cron :08 / :38 hourly | green no-op, same gate |
-| `run_bot_on_metaculus_cup.yaml` | **disabled** (2026-09-29): practice only, bots win no prizes, and it would spend credits | does not run |
-| `run_bot_on_mantic.yaml` | active, cron :05 / :15 / :25 hourly | green no-op until `MANTIC_TOKEN` and `OPENROUTER_API_KEY` both exist |
-| `test_bot.yaml`, `test_bot_basic.yaml` | manual only | green no-op, same gate |
-| `fetch_diagnostic.yaml` | manual only | runs; holds no key by construction |
-| `claude.yml` | an owner-written `@claude` mention | skipped for everyone else; needs `ANTHROPIC_API_KEY` to do anything |
+`python -m kira_scheduler` (in `kira_scheduler/`) is the one process. It runs the same commands as the
+three workflows it replaced, with the same env mapping and the same 70 minute run timeout. Slots are
+UTC minutes past every hour. They stay UTC although the container's `TZ` is Europe/Stockholm, which
+is 1 or 2 hours ahead: the scheduler reads the clock as UTC only, and the bot child is pinned to
+`TZ=UTC` as it was on Actions:
 
-**The gate.** Each bot workflow's first step, "Check deployment secrets", checks whether its
-secrets exist: the Metaculus token plus at least one OpenRouter key (Mantic: `MANTIC_TOKEN` plus
-`OPENROUTER_API_KEY`). If they don't, the run ends green with a "Bot not configured" notice, in
-seconds: install and the bot step are skipped, the log upload finds nothing, and nothing can be
-spent or published. **If they do, the run is live.** Adding the secrets is what switches a workflow
-on; no YAML edit is needed.
+| Workflow | Slots | Command | Needs (the gate) |
+|---|---|---|---|
+| tournament | :03 :23 :43 | `main.py` | `METACULUS_TOKEN` and `OPENROUTER_API_KEY` |
+| minibench | :08 :38 | `main.py --mode minibench` | `METACULUS_TOKEN` and `OPENROUTER_API_KEY` |
+| mantic | :05 :15 :25 | `main.py --mode mantic` | `MANTIC_TOKEN` and `OPENROUTER_API_KEY` |
 
-**Repository variables already set (2026-09-29): the zero-credit posture, mode M4.** Until a grant
-lands, the first armed runs forecast at $0 of OpenRouter spend:
+- **Without the gate keys** a workflow logs `not configured` once per slot and does nothing. The
+  program stays healthy, so the container stays healthy. The first run happens as soon as the keys
+  exist, because a start (and `kira-secrets` restarts the program) catches up the latest missed slot.
+- **Never two runs of one workflow at once.** A slot that arrives mid-run is queued once and starts
+  the moment the run ends. Different workflows may overlap, as they did on Actions.
+- **`kira-earn restart metaculus-bot` (or a SIGTERM)** stops the run in progress cleanly, records it,
+  and leaves that slot unhandled so the next start repeats it.
+- **The Cup is not run.** It is practice only; bots win nothing there.
+- **Two changes from the old Actions gate:** the donated key alone no longer arms a workflow (the
+  personal `OPENROUTER_API_KEY` is required, and needed anyway for the free tier), and each run's
+  files live on Kira, not in a public Actions artifact.
+- **GitHub Actions can no longer run this bot on a timer.** The `schedule:` triggers are gone from the
+  three workflows. `workflow_dispatch` remains for a deliberate manual run; with no GitHub secrets
+  set it stops at "Bot not configured", so it cannot spend. Keep it that way.
 
-| Variable | Value | Effect |
+**The default mode is the zero-credit posture (M4).** These are the program's `env_defaults`; the env
+file overrides them:
+
+| Variable | Default | Effect |
 |---|---|---|
 | `FORECASTER_FREE_TIER_ENABLED` | `true` | three `:free` forecasters and a free parser |
 | `SUPPORT_MODEL_ROUTE` | `free` | text-only support roles on a `:free` model |
 | `GAP_FILL_ENABLED`, `GAP_FILL_V2_ENABLED`, `NATIVE_SEARCH_ENABLED` | `false` | the three paid web-research roles off |
-| `GEMINI_SEARCH_ENABLED` | `false` | no Google AI Studio key yet; on without one, it errors on every question |
+| `GEMINI_SEARCH_ENABLED` | `false` | on without a Google key it errors on every question |
 | `OPENROUTER_CREDIT_FLOOR_USD` | `15` | early warning sized for a small grant, not upstream's $1,500 |
 
-Research in this posture is AskNews (once its keys exist), prediction-market snapshots,
-FRED/yfinance and cited resolution sources. Change the variables to the mode your grant affords
-the day it lands (see "Cost and credits"). A variable takes effect at the next run, with no commit.
+Mantic is the exception: like its old workflow, it pins the research switches on and does not read
+these flags, and it spends your personal OpenRouter key (about $3 a question). It stays idle until
+you add `MANTIC_TOKEN`. Only add that on purpose.
 
-## What only the owner can do
+## Step by step
 
-Account creation, passwords, and pasting keys are yours. An agent is not allowed to create
-accounts or enter credentials, even with permission. Run each `gh secret set` yourself: it
-prompts for the value, so the key never appears in a terminal log or in this repo.
+An agent may not create accounts or enter credentials, even with permission, so these are yours.
+`kira-secrets` asks for each value with nothing echoed, and restarts the program when you finish.
+Times are hands-on; waiting on Metaculus is not included.
 
-Times are hands-on estimates. Waiting on Metaculus is not included.
-
-### 1. Metaculus bot account and METACULUS_TOKEN (about 10 min)
+### 1. Metaculus bot account (10 min)
 
 On metaculus.com, sign up as a human (or log in). Then **Settings > My Forecasting Bots > Create a
-Bot**, enter the details, and copy the bot's API key. Then:
+Bot**, enter the details, and copy the bot's API key. That is `METACULUS_TOKEN`. To see the bot's
+forecasts later: Settings > My Bots > "Switch to bot account", then open a question; the bot's
+comment is under the "Private" tab (FutureEval makes them public at intervals).
 
-```bash
-gh secret set METACULUS_TOKEN --repo napzter13/metaculus-bot
-```
-
-To see the bot's forecasts later: Settings > My Bots > "Switch to bot account", then open a
-question. The bot's comment is under the "Private" comment tab; FutureEval makes them public at
-intervals.
-
-### 2. Participation and credit form (about 10 min, then wait)
+### 2. The form (10 min, then wait)
 
 One Google Form does both jobs: <https://forms.gle/aQdYMq9Pisrf1v7d8>. The first section is the
-**required** participation form (three required questions); the rest is the LLM-credit
-application. It asks about you, your motivation and your commercial status, so it is yours to
-fill in. Worth knowing when you answer:
+**required** participation form (three required questions); the rest is the LLM-credit application.
+It asks about you, your motivation and your commercial status, so it is yours to fill in. Worth
+knowing when you answer:
 
 - Commercial bots (a for-profit with three or more people) get no credits and no prizes unless
   fully open-sourced. This repo is public and open-source.
@@ -81,93 +92,113 @@ fill in. Worth knowing when you answer:
 - **"If you run out, assume we won't be able to give you more credits."** Re-apply each season.
   Plan for no top-ups.
 
-### 3. OpenRouter personal key (about 5 min)
+### 3. OpenRouter key (5 min)
 
-Create an account and key at openrouter.ai. It is needed even for the free tier: OpenRouter
-requires a key for `:free` models too. It can stay unfunded; whatever balance it holds is spent by
-any call the donated key does not cover.
+Create an account and key at openrouter.ai (Settings > Keys). It is needed even for the free tier,
+because OpenRouter requires a key for `:free` models too. It may stay unfunded; whatever balance it
+holds is spent by any call the donated key does not cover. That is `OPENROUTER_API_KEY`.
 
-```bash
-gh secret set OPENROUTER_API_KEY --repo napzter13/metaculus-bot
-```
-
-**Adding this secret together with step 1 arms the tournament and MiniBench workflows**, in the
-zero-credit posture above.
-
-### 4. AskNews (about 10 min)
+### 4. AskNews (10 min)
 
 Metaculus partners with AskNews to give bots free news search. Sign up at <https://my.asknews.app>,
 then create credentials at Settings > API credentials
-(<https://my.asknews.app/en/settings/api-credentials>). The Resources page's "Getting AskNews
-Setup" section has any bot-maker specifics.
+(<https://my.asknews.app/en/settings/api-credentials>). They are `ASKNEWS_CLIENT_ID` and
+`ASKNEWS_SECRET`. The Resources page's "Getting AskNews Setup" section has bot-maker specifics.
+
+### 5. Paste the keys on Kira (5 min)
 
 ```bash
-gh secret set ASKNEWS_CLIENT_ID --repo napzter13/metaculus-bot
-gh secret set ASKNEWS_SECRET --repo napzter13/metaculus-bot
+ssh -tt kira kira-secrets
 ```
 
-### 5. When the grant lands (about 5 min)
+Pick `metaculus-bot`, then paste `METACULUS_TOKEN`, `OPENROUTER_API_KEY`, `ASKNEWS_CLIENT_ID` and
+`ASKNEWS_SECRET`. **The first two arm the tournament and MiniBench**, in the zero-credit mode. Then tell
+@kira_earnings_bot `check metaculus`, or run `docker exec kira-earn kira-earn ps` on Kira and look for
+`metaculus-bot` RUNNING with a summary that no longer says "not configured".
 
-```bash
-gh secret set OAI_ANTH_OPENROUTER_KEY --repo napzter13/metaculus-bot
-```
+### 6. When the grant lands (5 min)
 
-Then pick the mode the grant affords (see "Which mode for which grant" below), for example M2:
+In `kira-secrets` set `OAI_ANTH_OPENROUTER_KEY` (the key Metaculus emails you), then set the mode
+flags the grant affords (see "Which mode for which grant"). For example M2, paid forecasters and the
+main web research, with MiniBench off:
 
-```bash
-R=napzter13/metaculus-bot
-gh variable set FORECASTER_FREE_TIER_ENABLED --repo $R --body false
-gh variable set NATIVE_SEARCH_ENABLED --repo $R --body true
-gh variable set GAP_FILL_V2_ENABLED --repo $R --body true
-# GAP_FILL_ENABLED stays false in M2; SUPPORT_MODEL_ROUTE stays free.
-```
-
-Check the balance on OpenRouter's key page at any time.
-
-### 6. Optional keys
-
-| Secret | Without it |
+| Variable | Value |
 |---|---|
-| `GEMINI_API_KEY` (Google AI Studio; mapped to `GOOGLE_API_KEY`) | Gemini grounded search stays off (`GEMINI_SEARCH_ENABLED=false`); set the variable to `true` once the key exists |
-| `exa_key` | Gap-fill v2's web search tool reports "not configured" and fails soft. Exa is NOT covered by donated credits |
+| `FORECASTER_FREE_TIER_ENABLED` | `false` |
+| `NATIVE_SEARCH_ENABLED` | `true` |
+| `GAP_FILL_V2_ENABLED` | `true` |
+| `WORKFLOW_MINIBENCH_ENABLED` | `false` |
+
+`SUPPORT_MODEL_ROUTE` stays `free` and `GAP_FILL_ENABLED` stays `false` in M2. Saving restarts the
+program, which re-reads its env. Check the balance on OpenRouter's key page at any time.
+
+### 7. Optional keys
+
+| Key | Without it |
+|---|---|
+| `GEMINI_API_KEY` (aistudio.google.com > Get API key) | Gemini grounded search stays off; set `GEMINI_SEARCH_ENABLED=true` once the key exists |
+| `EXA_API_KEY` | Gap-fill v2's web search tool reports "not configured" and fails soft. Not covered by donated credits |
 | `PERPLEXITY_API_KEY` | That provider is skipped |
 | `FRED_API_KEY` | FRED series are skipped; yfinance still runs |
 | `SEC_EDGAR_CONTACT_EMAIL` | The EDGAR client declines and the ordinary page fetch takes over |
-| `ANTHROPIC_API_KEY` | `claude.yml` cannot run; the roster does not use it |
-| `MANTIC_TOKEN` | The Mantic workflow stays gated |
-
-Secrets never reach a fork's run: GitHub withholds them from workflows triggered by forks' pull
-requests, and the secret-leakage audit noted in the workflows found no logger that emits a
-credential.
-
-### 7. Confirm the first armed run (about 10 min)
-
-After the next cron minute, or after running `gh workflow run run_bot_on_tournament.yaml --repo
-napzter13/metaculus-bot` (free in the M4 posture, a paid run once you switch mode), open the run:
-"Check deployment secrets" shows no notice, "Run bot" runs, and the log lists the questions it
-forecast. Check the bot's Metaculus profile (step 1) for the forecasts and private comments. Zero
-open questions usually means the participation form (step 2) has not been processed.
-
-GitHub drops many scheduled firings. Upstream compensated with an external cron-job.org dispatcher
-(docs/operations.md "Scheduling reliability"), which belongs to the upstream account. Set up your
-own only if runs show missed questions.
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | Unused by the roster, which goes through OpenRouter |
+| `MANTIC_TOKEN` | The mantic workflow stays idle (see the warning above before adding it) |
 
 ### 8. End-of-season bot-maker survey (after the season, about 15 min)
 
-Not now. After the season's questions resolve, Metaculus emails the survey (0 to 2 weeks after),
-bot makers have about 4 weeks to fill it in, and **prizes are paid only after all surveys are
-in**, via Ramp. The page also warns that a prize bot may be asked to demonstrate itself live, to
-show there is no human in the loop. What this repo can say in the survey:
+Not now. After the season's questions resolve, Metaculus emails the survey (0 to 2 weeks after), bot
+makers have about 4 weeks to fill it in, and **prizes are paid only after all surveys are in**, via
+Ramp. The page also warns that a prize bot may be asked to demonstrate itself live, to show there is
+no human in the loop. What this repo can say in the survey:
 
 - **Forecasters**: `openai/o3` (default effort), `anthropic/claude-sonnet-4.5` (effort high),
   `openai/gpt-5.6-sol` (effort high), via OpenRouter; the published forecast is the median of the
-  three, with stacking off. Give the dates of any free-tier (`FORECASTER_FREE_TIER_ENABLED`) or
-  cost-mode period, from the variables' history.
+  three, with stacking off. Give the dates of any free-tier or cost-mode period.
 - **Research**: AskNews, OpenAI native web search, Gemini grounded search, prediction-market
   snapshots (Polymarket, Kalshi, Manifold), FRED/yfinance, cited resolution sources, and two
   gap-fill passes, as the chosen mode allowed.
 - **Code**: public at github.com/napzter13/metaculus-bot, a fork of No-Stream/metaculus-bot on
   `forecasting-tools`.
+
+## Operating it
+
+| Want | Do (as kira on the host) |
+|---|---|
+| status of every program | `docker exec kira-earn kira-earn ps` |
+| this program's log | `docker exec kira-earn kira-earn logs metaculus-bot 100` |
+| restart (re-reads the env) | `docker exec kira-earn kira-earn restart metaculus-bot` |
+| deploy new code | `kira-earn-host update metaculus-bot` |
+| one run's full output | `/var/lib/kira-earn/metaculus-bot/runs/<workflow>/<UTC stamp>.log` in the container |
+
+Under `/var/lib/kira-earn/metaculus-bot/` (`$KIRA_EARN_DATA`): `status.json` (below), `state.json`
+(the scheduler's memory of handled slots and totals), `heartbeat`, `runs/<workflow>/*.log`, and
+`work/` (the bot's `run_logs/` and `research_outputs/`). Logs and work files older than 14 days are
+pruned. A run's exit code 1 usually means the bot published and then reported degradation events
+(the log says "Run completed with N alertable degradation event(s)"); a traceback is a real failure.
+
+### status.json
+
+Written atomically at least every 30 seconds. It is one file with two views, the program contract's
+and the dashboard's. Timestamps are UTC ISO-8601 strings in the first view and epoch seconds in the
+second.
+
+| Field | Meaning |
+|---|---|
+| `schema` | `1` |
+| `updated_at` | ISO time of this write |
+| `summary` | one line, at most 200 characters, for `kira-earn ps` and the dashboard |
+| `configured` | true when `METACULUS_TOKEN` and `OPENROUTER_API_KEY` are both set |
+| `missing` | the gate keys not yet set (names only) |
+| `mode` | the seven cost flags as the tournament run sees them |
+| `workflows.<tournament\|minibench\|mantic>` | `enabled`, `configured`, `next_slot`, `last_started`, `last_finished`, `last_rc`, `questions_forecast` and `spend_usd` (totals since the data dir began), `error`, `running`, plus `last_questions`, `last_spend_usd`, `degraded` for the last run |
+| `heartbeat` | epoch seconds of the last heartbeat write |
+| `started` | epoch seconds the program process started |
+| `last_run` | the most recently finished run: `kind`, `ok`, `finished` (epoch), `error`, plus `rc` and `degraded`; `null` before any run |
+| `last_ok` | epoch seconds of the last run that exited 0; `null` before one |
+
+`last_run.ok` is true only for exit code 0, so a run that published but reported degradation events is
+`ok: false` with `degraded: true`. A run stopped by a restart is recorded under its workflow but not
+as `last_run`, since a stop is not a failure. No secret value is ever written to this file.
 
 ## Cost and credits
 
@@ -210,8 +241,8 @@ is upstream's all-in estimate for upstream's roster, not a measurement of this f
 
 ### The cost modes
 
-Every mode is set with repository **variables** (Settings > Secrets and variables > Actions >
-Variables), so switching needs no commit. Each takes effect at the next run.
+Every mode is set through `kira-secrets` (pick `metaculus-bot`, set the variable), so switching
+needs no commit. Saving restarts the program, and the new mode applies from the next run.
 
 | Mode | Variables | $ / question | Tournament (300 to 500 q) | + MiniBench (about 420 q) | Questions on $100 | Questions on $1,500 | Quality |
 |---|---|---|---|---|---|---|---|
@@ -235,7 +266,7 @@ says to assume none will come.
 Prize money per question differs about tenfold. The tournament pays about $50k over 300 to 500
 questions, $100 to $170 of pool per question. MiniBench pays about $1k per 60-question round, about
 $17. On any grant that cannot cover both, **spend credits on the tournament and disable
-MiniBench** (`gh workflow disable run_bot_on_minibench.yaml --repo napzter13/metaculus-bot`).
+MiniBench** (set `WORKFLOW_MINIBENCH_ENABLED=false` in `kira-secrets`).
 
 - **Small grant (about $100).** No paid mode covers a season. Disable MiniBench. Run the tournament
   in **M3**: about 208 questions of paid forecasters, 40 to 70 percent of the tournament. When the
@@ -278,20 +309,19 @@ Nothing stops by itself, so a dry wallet means red runs until you switch mode or
 ### Kira's own model: sized, not built
 
 Routing text roles to Kira's local model (`primary` through LiteLLM) was sized and deliberately
-not built:
+not built. The bot now runs on Kira, so the reachability objection that applied on GitHub Actions
+is gone: the manifest could set `litellm: true` and the container would get `LITELLM_BASE_URL`.
+The case is still weak:
 
-- **It only works if the bot runs on Kira.** `LITELLM_BASE_URL` is a private address, which GitHub's
-  runners cannot reach. The bot would have to leave Actions for a cron on Kira, with the secrets
-  held there.
 - **It saves about $0.06 a question, about $14 a season.** Only the summarizer and the gap-fill
   analyzer fit. The kira-linux engines runbook measures prefill at about 1,000 tokens a second on
   one queue with no prompt cache: about 6 s for the summarizer (6K-token prompt, 300 s wall) and
   about 10 s for the analyzer (10K, 120 s). The market ranker (35K-token prompt, 60 s wall) and
   the page digest (30 s wall) do not fit once two questions share the queue. The runbook's
   worst queue wait, 476 s, breaks every wall.
-- **`SUPPORT_MODEL_ROUTE=free` gets the same effect on Actions**, at no GPU time.
-
-If the bot ever moves to Kira for other reasons, this is a small addition to the same builder.
+- **It competes with Kira's own bots for the one GPU queue**, and a stalled queue would stall a
+  forecast against a one-hour question window.
+- **`SUPPORT_MODEL_ROUTE=free` gets the same effect** on a free cloud model, at no GPU time.
 
 ## Tournament, MiniBench, Cup, Mantic, Market Pulse
 
@@ -300,32 +330,34 @@ If the bot ever moves to Kira for other reasons, this is a small addition to the
   the first bot per participant is prize-eligible; extra bot accounts are not.
 - **MiniBench** (about $1k per two-week round of about 60 questions): runs `--mode minibench`
   against `MetaculusApi.CURRENT_MINIBENCH_ID` from `forecasting-tools`, so it follows the current
-  round with no ID in this repo. Upstream kept it disabled; here it is enabled and arms with the
-  secrets. Disable it on a small or medium grant ("Which mode for which grant"). If the library's
+  round with no ID in this repo. Upstream kept it disabled; here it runs whenever the gate keys
+  exist. Disable it on a small or medium grant ("Which mode for which grant"). If the library's
   pinned ID lags a new round, the fix is a `forecasting-tools` bump.
-- **Metaculus Cup**: practice only; bots are not prize-eligible. **Disabled here on 2026-09-29.**
-  Re-enable with `gh workflow enable run_bot_on_metaculus_cup.yaml --repo napzter13/metaculus-bot`
-  if you want the human-comparison benchmark and have credits to spare.
-- **Mantic**: personal keys only, about $3 per question; stays idle without `MANTIC_TOKEN`.
+- **Metaculus Cup**: practice only; bots are not prize-eligible. Kira does not run it. Its Actions
+  workflow is disabled and still carries its old `schedule:`, which cannot spend without GitHub
+  secrets; leave it that way.
+- **Mantic**: personal keys only, about $3 per question, and it ignores the mode flags; it stays
+  idle without `MANTIC_TOKEN`.
 - **Market Pulse** (about $7k, bot-eligible): bots update forecasts on numeric group questions
   throughout each question's life. Not supported. The repo has no run mode or workflow for it,
   only a slug probe in `scripts/probe_slugs.py`, and continuous updating is a different loop from
-  this bot's forecast-once design. Adding it means a new mode and a new paid cron.
+  this bot's forecast-once design. Adding it means a new mode and a new scheduler entry.
 
 ## Public-repo notes
 
-- Each bot run uploads its logs and research as a 90-day Actions artifact, readable by anyone.
-  They hold question URLs, predictions and research text (already public on Metaculus), never keys.
+- Runs no longer upload artifacts: logs and research stay on Kira, so nothing about a run is
+  public except what the bot publishes to Metaculus. Older Actions artifacts, if any, were public.
 - CI's `secret_scan` job runs gitleaks on every push. The full history (every commit on every
   branch) was scanned clean on 2026-09-28 with the repo's `.gitleaks.toml`; its allowlist forgives
   only named fixtures by path AND pattern.
-- `.env` is gitignored; copy `.env.template` for local work. Local run output (`run_logs/`,
+- No secret belongs in this repo. On Kira the keys live in `/srv/kira-earn/env/metaculus-bot.env`.
+  For local work copy `.env.template` to `.env` (gitignored); local run output (`run_logs/`,
   `research_outputs/`, `scratch/`) is gitignored too.
 - The docs and Makefile still say `gh ... --repo No-Stream/metaculus-bot` in places. For this
   fork, read that as `napzter13/metaculus-bot`.
 
 ## The cost gate still applies
 
-Once secrets exist, every bot workflow firing, dispatch, `make run` in a live mode and backtest
-spends and, for bot modes, publishes. AGENTS.md "Cost gate" lists them. The free gates are
+Once the gate keys exist, every scheduled run on Kira, every manual workflow dispatch, `make run` in
+a live mode and every backtest spends and, for bot modes, publishes. AGENTS.md "Cost gate" lists them. The free gates are
 `make lint`, `make lint_imports`, `make typecheck` and `make test`.

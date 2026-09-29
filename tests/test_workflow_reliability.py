@@ -34,6 +34,7 @@ from typing import Any
 import pytest
 import yaml
 
+from kira_scheduler.spec import WORKFLOWS
 from metaculus_bot.constants import (
     METACULUS_CLOSE_WINDOW_SECONDS,
     PER_QUESTION_WALL_CLOCK_DEADLINE,
@@ -299,13 +300,10 @@ class TestScheduledBotCadence:
     def test_the_scheduled_bot_set_is_what_we_think_it_is(self) -> None:
         # Derived from the files, then pinned: the two test workflows are dispatch-only
         # (spending is the operator's choice), and a new cron on one of them would show up
-        # here rather than silently starting to publish on a schedule.
-        assert sorted(self.scheduled) == [
-            ".github/workflows/run_bot_on_mantic.yaml",
-            ".github/workflows/run_bot_on_metaculus_cup.yaml",
-            ".github/workflows/run_bot_on_minibench.yaml",
-            ".github/workflows/run_bot_on_tournament.yaml",
-        ]
+        # here rather than silently starting to publish on a schedule. The tournament,
+        # MiniBench and Mantic schedules moved to Kira (kira_scheduler/); a cron back on any of
+        # them would run beside it and spend twice, so only the Cup, which is disabled, keeps one.
+        assert sorted(self.scheduled) == [".github/workflows/run_bot_on_metaculus_cup.yaml"]
 
     def test_every_scheduled_bot_workflow_is_hourly_and_off_the_hour(self) -> None:
         for rel_path, crons in self.scheduled.items():
@@ -350,19 +348,39 @@ class TestScheduledBotCadence:
         (docs/operations.md "Scheduling reliability"). Two crons at :17/:47 would have forfeited
         roughly half of all one-hour questions and given the :47 pickup only the fast path.
         """
-        minutes = sorted(int(cron.split()[0]) for cron in self.scheduled[self.mantic_rel_path])
+        minutes = sorted(next(wf.slots for wf in WORKFLOWS if wf.name == "mantic"))
         last_full_path_minute = (
             self._MANTIC_WINDOW_SECONDS - PUBLISH_RESERVE_SECONDS - TIME_BUDGET_FAST_PATH_THRESHOLD
         ) // 60
         assert len(minutes) >= self._MANTIC_MIN_ENTRIES, (
-            f"{self.mantic_rel_path} has {len(minutes)} cron entry(ies); under GitHub's measured ~22% delivery a "
-            f"60-minute Mantic window needs at least {self._MANTIC_MIN_ENTRIES} early chances"
+            f"the Mantic scheduler has {len(minutes)} slot(s); a 60-minute Mantic window needs at least "
+            f"{self._MANTIC_MIN_ENTRIES} early chances (the count was sized for GitHub's ~22% cron delivery)"
         )
         assert max(minutes) <= last_full_path_minute, (
-            f"{self.mantic_rel_path} fires at {minutes}, but a pickup after :{last_full_path_minute} of a "
+            f"the Mantic scheduler fires at {minutes}, but a pickup after :{last_full_path_minute} of a "
             "60-minute Mantic window falls under the fast-path threshold and gets only the degraded research "
             "path; later entries buy little and the last quarter-hour buys nothing"
         )
+
+
+class TestKiraSchedulerCadence:
+    """The moved workflows keep the cadence rules, now read from ``kira_scheduler.spec``.
+
+    Off the hour and at least two chances an hour, as above. Distinct minutes matter more here than
+    on Actions: the three workflows share one container's memory and one set of research quotas, so
+    a shared minute starts two full runs at once on the same box. The Cup's remaining Actions crons
+    are included, because a re-enabled Cup should not land on a Kira minute.
+    """
+
+    def test_every_workflow_fires_off_the_hour_at_least_twice_an_hour(self) -> None:
+        for wf in WORKFLOWS:
+            assert len(wf.slots) >= 2, f"{wf.name}: one slot an hour leaves a question waiting up to an hour"
+            assert all(0 < minute < 60 for minute in wf.slots), f"{wf.name}: {wf.slots} includes the :00 minute"
+
+    def test_no_two_workflows_share_a_minute_with_each_other_or_the_cup(self) -> None:
+        cup = TestScheduledBotCadence._schedule(".github/workflows/run_bot_on_metaculus_cup.yaml")
+        minutes = [m for wf in WORKFLOWS for m in wf.slots] + [int(c.split()[0]) for c in cup]
+        assert len(minutes) == len(set(minutes)), sorted(minutes)
 
 
 class TestFetchDiagnosticCannotSpend:

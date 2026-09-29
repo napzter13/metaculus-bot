@@ -2,13 +2,10 @@ name: Forecast on new AI tournament questions
 
 on:
   workflow_dispatch:
-  schedule:
-    # Split across multiple cron entries to avoid GitHub Actions silently dropping
-    # */N schedules under runner load. Off-the-hour offsets dodge the :00 burst.
-    # Make sure to skip already forecasted questions!
-    - cron: "3 * * * *"  # every hour at :03
-    - cron: "23 * * * *" # every hour at :23
-    - cron: "43 * * * *" # every hour at :43
+  # No `schedule:` here on purpose. This bot runs on Kira as the `metaculus-bot` program of
+  # kira-earn (kira_scheduler/, kira-earn.json), UTC minutes past each hour, tournament: :03, :23 and :43. A cron
+  # here would run beside it and spend twice. This dispatch trigger stays for a deliberate
+  # manual run, which spends and publishes exactly like a scheduled one. docs/KIRA-SETUP.md.
 
 # Add concurrency group to prevent parallel runs
 concurrency:
