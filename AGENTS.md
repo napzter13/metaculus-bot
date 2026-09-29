@@ -8,9 +8,10 @@ expensive. Depth is in `docs/`, indexed by `docs/README.md`.
 
 This clone is the public fork `napzter13/metaculus-bot` (`origin`); `upstream` is No-Stream's repo.
 Three statements below are upstream's and do not hold here. Read `gh --repo No-Stream/metaculus-bot`
-as `--repo napzter13/metaculus-bot`. MiniBench is NOT disabled here: every bot workflow is enabled
-and held idle by its keyless "Check deployment secrets" step, which arms it once the secrets exist
-(docs/KIRA-SETUP.md). And commits go straight to `main` with no branches or PRs (house rule), so do
+as `--repo napzter13/metaculus-bot`. MiniBench is NOT disabled here: it and the tournament are enabled
+and held idle by the keyless "Check deployment secrets" step, which arms them once the secrets
+exist; the Cup workflow is disabled (practice only). Cost-mode repository variables are set to the
+zero-credit posture (docs/KIRA-SETUP.md). And commits go straight to `main` with no branches or PRs (house rule), so do
 not install the `no-commit-to-main` pre-commit hook in this clone.
 Dollar figures and grants in `docs/operations.md` and `README.md` are upstream's bot's, not this
 fork's. This fork's measured costs, cost modes and credit sizing are in docs/KIRA-SETUP.md "Cost and credits".
