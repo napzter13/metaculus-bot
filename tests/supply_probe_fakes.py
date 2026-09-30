@@ -15,12 +15,16 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 NOW = datetime(2026, 8, 31, 2, 24, tzinfo=UTC)
+# A question's default scheduled resolve time: "not yet due" for ANY clock. It used to be 2026-09-30, which
+# was in the future of the injected NOW but not of the real clock the CLI tests (``main``) read, so those
+# tests started counting it overdue the day 2026-09-30 passed.
+FAR_FUTURE = "2099-01-01T00:00:00Z"
 
 
 def _question(
     qid: int,
     *,
-    scheduled: str | None = "2026-09-30T00:00:00Z",
+    scheduled: str | None = FAR_FUTURE,
     actual: str | None = None,
     resolution: object = None,
     qtype: str = "numeric",

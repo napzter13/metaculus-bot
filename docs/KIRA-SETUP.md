@@ -74,6 +74,30 @@ Mantic is the exception: like its old workflow, it pins the research switches on
 these flags, and it spends your personal OpenRouter key (about $3 a question). It stays idle until
 you add `MANTIC_TOKEN`. Only add that on purpose.
 
+### Stacking is off in every mode, and what the log line means
+
+Every run log starts with `Ensemble configured: 3 model(s) | Aggregation: conditional_stacking` and
+names an Opus stacker. **That is the configured strategy, not what runs.** The bot's strategy is
+hard-coded to conditional stacking, and upstream turns it off per question type with
+`BINARY_STACKING_ENABLED`, `MC_STACKING_ENABLED` and `NUMERIC_STACKING_ENABLED`, all `false` (they
+default to off in the code as well). The scheduler pins all three to `false` for every workflow, in
+every mode, **whatever the env file says and whether or not the keys are funded**, so there is no
+variable to turn stacking on and credits arriving later do not turn it on either.
+
+What happens to a question is therefore: the three forecasters answer, and the published forecast is
+their **median**. When they disagree strongly, the bot skips the stacker and logs
+`Conditional stacking SKIPPED: stacking disabled for this question type` (the published comment then
+carries `STACKER_OUTCOME=skipped_config_off`). The crux analysis, the targeted search and the paid
+Opus stacker are not called, so none of them can bill a funded or an unfunded key. The stacker object
+is only constructed at start-up, which makes no call and costs nothing. Enabling stacking would be a
+code change to the pinned values in `kira_scheduler/spec.py`, and upstream measured the stacker as no
+better than the median (and worse on numeric questions).
+
+**What M4 spends.** On OpenRouter, nothing: the forecasters, the parser and every text-only support
+role run on `:free` models, and the paid research roles, the stacker and its helpers are off or
+gated off. This is read from the code and the env the scheduler builds; it has not yet been
+confirmed on a live run, because the first runs found no open questions (rc=0).
+
 ## Step by step
 
 An agent may not create accounts or enter credentials, even with permission, so these are yours.
@@ -164,7 +188,9 @@ no human in the loop. What this repo can say in the survey:
 
 - **Forecasters**: `openai/o3` (default effort), `anthropic/claude-sonnet-4.5` (effort high),
   `openai/gpt-5.6-sol` (effort high), via OpenRouter; the published forecast is the median of the
-  three, with stacking off. Give the dates of any free-tier or cost-mode period.
+  three, with stacking off (the log line `Aggregation: conditional_stacking` is the configured strategy;
+  see "Stacking is off in every mode"). Give the dates of any free-tier or cost-mode period, and that
+  the forecasters were the three free models whenever `FORECASTER_FREE_TIER_ENABLED` was true.
 - **Research**: AskNews, OpenAI native web search, Gemini grounded search, prediction-market
   snapshots (Polymarket, Kalshi, Manifold), FRED/yfinance, cited resolution sources, and two
   gap-fill passes, as the chosen mode allowed.
