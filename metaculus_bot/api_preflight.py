@@ -40,6 +40,13 @@ Deliberately NOT retried: this is an identity gate, not a transient-failure
 absorber. Retries (with the token attached) belong to ``fetch_hardening``, which
 runs only after identity is established. One shot, fail fast.
 
+One failure class is SKIPPED rather than failed: nothing reachable at all (DNS, connect, reset or
+timeout; ``TransientNetworkError``). No host answered, so no credential went anywhere and no identity
+was contradicted, and the entry point ends the run with exit 0 and a ``TRANSIENT_NETWORK_SKIP`` marker
+so the next slot simply tries again (2026-10-02: a WAN reconnect broke DNS for one slot and failed
+the run). A TLS failure and a wrong answer stay hard failures: a host that answered wrongly is the
+case this gate exists for.
+
 Signatures observed live:
 
 - Metaculus, unauthenticated GET ``/api/posts/?limit=1`` -> 403, ``text/plain``
@@ -62,6 +69,8 @@ from urllib.parse import urlparse
 
 import requests
 from forecasting_tools.helpers.metaculus_client import MetaculusClient
+
+from metaculus_bot.http_status import is_transient_network_error
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +144,17 @@ class ApiIdentityError(RuntimeError):
     """
 
 
+class TransientNetworkError(ApiIdentityError):
+    """The host could not be reached at all (DNS, connect, reset or timeout), so nothing answered.
+
+    A subclass of ``ApiIdentityError`` so every existing ``except ApiIdentityError`` still holds, but
+    one the entry point turns into a SKIPPED run instead of a failed one (``cli``): no host replied,
+    which means no credential was sent anywhere and no identity was contradicted, and the next slot
+    simply tries again. A host that DID answer wrongly (parked, hijacked, a bad certificate) is never
+    this class: that stays a hard failure.
+    """
+
+
 def _parse_json_object(body: str) -> dict[str, Any] | None:
     """Parse ``body`` as JSON, returning the object as a dict or None if it isn't a JSON object."""
     try:
@@ -162,6 +182,12 @@ def verify_api_identity(base_url: str, *, timeout: float = 20.0) -> None:
             session.trust_env = False  # do not let ~/.netrc or proxy env inject credentials
             response = session.get(url, timeout=timeout, allow_redirects=False)
     except requests.RequestException as e:
+        if is_transient_network_error(e):
+            raise TransientNetworkError(
+                f"{preflight} could not reach {url!r} ({type(e).__name__}: {e}); no host answered "
+                "(DNS/connect/timeout), so no credential was sent and the run is skipped to retry next slot. "
+                f"If it persists, check `dig {host}` and the platform's status channels."
+            ) from e
         raise ApiIdentityError(
             f"{preflight} could not reach {url!r} ({type(e).__name__}: {e}); "
             "DNS/TLS/connect failure before any response. "

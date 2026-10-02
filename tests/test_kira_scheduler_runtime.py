@@ -226,6 +226,7 @@ class TestResults:
             "error": None,
             "rc": 0,
             "degraded": False,
+            "transient": False,
         }
         assert status["last_ok"] == finished
 

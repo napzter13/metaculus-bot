@@ -61,13 +61,14 @@ import requests
 from forecasting_tools.data_models.questions import DateQuestion, MetaculusQuestion, NumericQuestion
 from forecasting_tools.helpers.metaculus_client import ApiFilter, GroupQuestionMode, MetaculusClient
 
-from metaculus_bot.api_preflight import BODY_PREVIEW_CHARS, ApiIdentityError
+from metaculus_bot.api_preflight import BODY_PREVIEW_CHARS, ApiIdentityError, TransientNetworkError
 from metaculus_bot.constants import (
     MANTIC_API_BASE_URL,
     MANTIC_FETCH_QUESTION_CEILING,
     MANTIC_SITE_URL,
     MANTIC_TOKEN_ENV,
 )
+from metaculus_bot.http_status import is_transient_network_error
 
 logger = logging.getLogger(__name__)
 
@@ -189,10 +190,13 @@ class ManticClient(MetaculusClient):
         try:
             response = requests.get(url, headers=self._get_auth_headers()["headers"], timeout=self.timeout)
         except requests.RequestException as exc:
-            raise ApiIdentityError(
+            message = (
                 f"Mantic {what} GET {url!r} failed before any response ({type(exc).__name__}: {exc}); the token's "
                 "forecast permission cannot be confirmed, so the run stops before any spend."
-            ) from exc
+            )
+            if is_transient_network_error(exc):
+                raise TransientNetworkError(message) from exc
+            raise ApiIdentityError(message) from exc
         body_preview = response.text[:BODY_PREVIEW_CHARS]
         if response.status_code != 200:
             raise ApiIdentityError(

@@ -75,6 +75,7 @@ incidents behind the design.
 | `PAID_PERSONAL_KEY_FALLBACK` (matches the log line `PAID PERSONAL-KEY FALLBACK`) | `fallback_openrouter.py:record_donated_key_fallback` | Per-call donated-to-personal key fallback WARN. |
 | `RUN_ALERTABLE_SUMMARY` (matches the log line `Run completed ... with N alertable ...`) | `cli.py` | The end-of-run alertable breakdown, emitted on every path. |
 | `ONLY_POSTS` | `cli.py:_tournament_source` | The `--only-posts` smoke filter, one line per run that set it. |
+| `TRANSIENT_NETWORK_SKIP` | `cli.py:_skip_run_for_transient_network` | A run skipped (exit 0) because DNS, connect or a timeout failed in the identity preflight or the question fetch. |
 | `QUESTION_CAP_FORFEIT` | `forecaster.py:forecast_questions` | The `max_questions_per_run` cap. |
 | `SKIP_GUARD_UNREADABLE` | `forecaster.py:_drop_questions_with_unreadable_forecast_history` | Per-question WARNING: the re-spend guard could not read `my_forecasts`, so the question was dropped rather than treated as never forecast. |
 | `GEMINI_UNGROUNDED_SUPPRESSED` | `research/gemini_search.py:_format_grounded_response` | Gemini grounded-search suppression. |
@@ -1153,6 +1154,17 @@ post ids asked for, the open ones the tournament actually held among them, and h
 questions the filter left out. It is what says which question a one-question paid run spent on.
 `requested` / `matched` are comma-separated post ids (a lone id coerces to int, several stay one
 string) and an empty match is `none`.
+
+### TRANSIENT_NETWORK_SKIP
+
+A run skipped, not failed, because the network was unreachable (`cli.py:_skip_run_for_transient_network`):
+one WARNING and exit 0, at most once per run. `stage` is `preflight` (the platform identity check, or
+Mantic's tournament check, which run before any spend) or `fetch` (the question-list fetch), and `error`
+is the exception class name. Only a pure connectivity failure qualifies (`http_status.is_transient_network_error`:
+DNS, connect, reset or timeout). A TLS failure and any HTTP status stay hard failures, because a host
+that answered wrongly is what the identity preflight exists to catch. Run-level, so no question ref.
+The Kira scheduler counts these across slots (docs/KIRA-SETUP.md "Network blips"); without the marker a
+skipped slot is indistinguishable from an idle one.
 
 ### QUESTION_CAP_FORFEIT
 

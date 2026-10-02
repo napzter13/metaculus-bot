@@ -216,6 +216,27 @@ read) 120 days, and if it passes 4 GiB the oldest files go first. Files the dash
 so new files stay in group `kira-earn-read`), so that group can read them. A run's exit code 1 usually means the bot published and then reported degradation events
 (the log says "Run completed with N alertable degradation event(s)"); a traceback is a real failure.
 
+### Network blips (DNS or connection failures)
+
+If the bot cannot reach Metaculus at all (a home-network reconnect, an ISP hiccup), it **skips** that
+run instead of failing it: it logs one `TRANSIENT_NETWORK_SKIP` warning and exits 0, having spent and
+sent nothing, and the next slot tries again. This covers the identity preflight and the question
+fetch. Only a pure connectivity failure counts (DNS, refused or reset connection, timeout). A TLS
+certificate failure, a wrong host answering, or any HTTP error still fails the run, because those mean
+something answered.
+
+The scheduler counts consecutive skipped slots per workflow (a real run of any kind ends the count; a
+restart keeps it) and reports:
+
+| Consecutive blips | `health` | Effect |
+|---|---|---|
+| 1 | `green` | nothing: `last_rc` 0, `last_run.ok` true, `last_run.transient` true, `error` says "transient network failure ... 1 in a row" |
+| 2 or 3 | `amber` | the summary starts `AMBER:`; `last_run.ok` stays true |
+| 4 or more | `red` | the summary starts `RED:`; `last_run.ok` becomes false, which is what the dashboard's red rule reads |
+
+At the tournament's 20-minute slots that is amber after about 20 to 40 minutes of outage and red after
+about an hour. A blip never advances `last_ok`, since no forecast was made.
+
 ### status.json
 
 Written atomically at least every 30 seconds. It is one file with two views, the program contract's
@@ -230,11 +251,13 @@ second.
 | `configured` | true when `METACULUS_TOKEN` and `OPENROUTER_API_KEY` are both set |
 | `missing` | the gate keys not yet set (names only) |
 | `mode` | the seven cost flags as the tournament run sees them |
-| `workflows.<tournament\|minibench\|mantic>` | `enabled`, `configured`, `next_slot`, `last_started`, `last_finished`, `last_rc`, `questions_forecast` and `spend_usd` (totals since the data dir began), `error`, `running`, plus `last_questions`, `last_spend_usd`, `degraded` for the last run |
+| `workflows.<tournament\|minibench\|mantic>` | `enabled`, `configured`, `next_slot`, `last_started`, `last_finished`, `last_rc`, `questions_forecast` and `spend_usd` (totals since the data dir began), `error`, `running`, plus `last_questions`, `last_spend_usd`, `degraded`, `transient` (the last run was a skipped blip), `transient_streak` and `health` |
 | `heartbeat` | epoch seconds of the last heartbeat write |
 | `started` | epoch seconds the program process started |
-| `last_run` | the most recently finished run: `kind`, `ok`, `finished` (epoch), `error`, plus `rc` and `degraded`; `null` before any run |
-| `last_ok` | epoch seconds of the last run that exited 0; `null` before one |
+| `last_run` | the most recently finished run: `kind`, `ok`, `finished` (epoch), `error`, plus `rc`, `degraded` and `transient`; `null` before any run. A workflow in a red blip streak is shown here in preference, so another workflow's clean run cannot hide it |
+| `last_ok` | epoch seconds of the last run that exited 0 and was not a skipped network blip; `null` before one |
+| `health` | `green`, `amber` or `red` (the worst enabled workflow), or `waiting` while keys are missing; amber and red come from blip streaks (see "Network blips") or a real failed last run |
+| `transient_streak` | the longest current run of consecutive network-blip skips across the workflows |
 
 `last_run.ok` is true only for exit code 0, so a run that published but reported degradation events is
 `ok: false` with `degraded: true`. A run stopped by a restart is recorded under its workflow but not

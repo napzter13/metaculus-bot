@@ -27,6 +27,7 @@ _RAW_RESEARCH_PREFIX = "raw_research_"
 
 _SUMMARY_RE = re.compile(r"CREDIT_RUN_SUMMARY:.*?n_questions=(\d+).*?charged_usd=([0-9.]+)")
 _DEGRADED_RE = re.compile(r"Run completed with \d+ alertable degradation event")
+_TRANSIENT_RE = re.compile(r"TRANSIENT_NETWORK_SKIP:\s*stage=(?P<stage>\S+)\s+error=(?P<error>\S+)")
 
 
 def write_text_atomic(path: Path, text: str) -> None:
@@ -102,7 +103,8 @@ def log_tail(path: Path) -> str:
 
 def summarize_log(path: Path) -> dict[str, Any]:
     """From a finished run's log: questions forecast and dollars charged (last summary line), and
-    whether the bot reached its completion line with degradation events (it publishes, then exits 1)."""
+    whether the bot reached its completion line with degradation events (it publishes, then exits 1), and
+    whether it skipped the run for a network blip (the ``TRANSIENT_NETWORK_SKIP`` marker)."""
     tail = log_tail(path)
     matches = _SUMMARY_RE.findall(tail)
     questions: int | None = None
@@ -110,11 +112,14 @@ def summarize_log(path: Path) -> dict[str, Any]:
     if matches:
         questions, spend = int(matches[-1][0]), float(matches[-1][1])
     last_line = next((ln.strip() for ln in reversed(tail.splitlines()) if ln.strip()), "")
+    transient = _TRANSIENT_RE.search(tail)
     return {
         "questions": questions,
         "spend_usd": spend,
         "degraded": bool(_DEGRADED_RE.search(tail)),
         "last_line": last_line[:200],
+        # The bot skipped the run (exit 0) because DNS, connect or a timeout failed: a network blip.
+        "transient": transient.groupdict() if transient else None,
     }
 
 

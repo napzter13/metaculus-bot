@@ -41,6 +41,10 @@ TICK_S = 1.0
 KILL_GRACE_S = 30
 STOP_GRACE_S = 60
 SUMMARY_MAX_CHARS = 200
+# Consecutive network-blip skips (one per slot of one workflow) before the program reports itself
+# unwell. One blip is ordinary (a WAN reconnect), two in a row is worth a look, four is an outage.
+TRANSIENT_AMBER_STREAK = 2
+TRANSIENT_RED_STREAK = 4
 
 CommandFor = Callable[[Workflow], list[str]]
 
@@ -356,6 +360,39 @@ class Scheduler:
                 run.killed = True
                 self._signal_group(run.proc, signal.SIGKILL)
 
+    def _outcome(
+        self, wf: Workflow, run: _Run, rc_value: int, summary: dict[str, Any]
+    ) -> tuple[str | None, dict[str, str] | None]:
+        """What the run's end means: ``(error text, network-blip details)``, and the blip streak updated.
+
+        A blip is a run the bot itself SKIPPED (exit 0 plus the ``TRANSIENT_NETWORK_SKIP`` marker). A
+        timeout, a stop or a non-zero exit is something else whatever the log says, so none of them
+        counts as one. A stop says nothing about the network, so the streak is left as it was; any
+        other run, well or badly, reached the platform and ends the streak.
+        """
+        state = self._wstate(wf)
+        if run.reason == "shutdown":
+            state["handled_slot"] = store.iso(run.prev_handled)  # the next start repeats this slot
+            state["last_transient"] = False
+            return "stopped by SIGTERM (scheduler shutdown)", None
+        transient = summary["transient"] if rc_value == 0 and run.reason is None else None
+        state["last_transient"] = transient is not None
+        if transient is not None:
+            streak = int(state.get("transient_streak", 0)) + 1
+            state["transient_streak"] = streak
+            error = (
+                f"transient network failure at {transient['stage']} ({transient['error']}), "
+                f"{streak} in a row; retrying next slot"
+            )
+            return error[:SUMMARY_MAX_CHARS], transient
+        state["transient_streak"] = 0
+        if run.reason == "timeout":
+            return f"timeout after {wf.run_timeout_s // 60}m", None
+        if rc_value != 0:
+            note = " (published with degradation events)" if summary["degraded"] else ""
+            return f"exit {rc_value}{note}: {summary['last_line']}"[:SUMMARY_MAX_CHARS], None
+        return None, None
+
     def _finish(self, wf: Workflow, run: _Run, rc: int | None, now: datetime) -> None:
         # The leader is gone but a grandchild (a browser, a helper) may not be, and SIGKILL to the group
         # only lands while some member lives, so send it now, whatever the exit reason was.
@@ -365,16 +402,7 @@ class Scheduler:
         state = self._wstate(wf)
         rc_value = rc if rc is not None else -1
         interrupted = run.reason == "shutdown"
-        if interrupted:
-            error: str | None = "stopped by SIGTERM (scheduler shutdown)"
-            state["handled_slot"] = store.iso(run.prev_handled)  # the next start repeats this slot
-        elif run.reason == "timeout":
-            error = f"timeout after {wf.run_timeout_s // 60}m"
-        elif rc_value != 0:
-            note = " (published with degradation events)" if summary["degraded"] else ""
-            error = f"exit {rc_value}{note}: {summary['last_line']}"[:SUMMARY_MAX_CHARS]
-        else:
-            error = None
+        error, transient = self._outcome(wf, run, rc_value, summary)
         state.update(
             last_finished=store.iso(now),
             last_rc=rc_value,
@@ -388,8 +416,8 @@ class Scheduler:
             state["last_spend_usd"] = summary["spend_usd"]
             state["questions_total"] = int(state.get("questions_total", 0)) + summary["questions"]
             state["spend_total"] = round(float(state.get("spend_total", 0.0)) + (summary["spend_usd"] or 0.0), 4)
-        if rc_value == 0 and not interrupted and run.reason is None:
-            state["last_ok_finished"] = store.iso(now)
+        if rc_value == 0 and not interrupted and run.reason is None and transient is None:
+            state["last_ok_finished"] = store.iso(now)  # a skipped blip is not a successful forecast run
         self._save_state()
         rt = self._rt[wf.name]
         rt.run = None
@@ -433,6 +461,26 @@ class Scheduler:
         self._dirty = True  # status.json carries this heartbeat, so it is rewritten with it
         store.write_text_atomic(self.heartbeat_path, f"{_epoch(now)}\n")
 
+    def _health(self, wf: Workflow) -> str:
+        """green, amber (2 or 3 blips in a row) or red (4 in a row, or the last run really failed)."""
+        state = self._wstate(wf)
+        streak = int(state.get("transient_streak", 0))
+        failed = state.get("last_rc") not in (None, 0) and not state.get("last_interrupted")
+        if streak >= TRANSIENT_RED_STREAK or failed:
+            return "red"
+        return "amber" if streak >= TRANSIENT_AMBER_STREAK else "green"
+
+    def _program_health(self) -> str:
+        if envmod.program_missing(self.environ):
+            return "waiting"
+        live = [
+            wf
+            for wf in self.workflows
+            if envmod.workflow_enabled(wf, self.environ) and not envmod.workflow_missing(wf, self.environ)
+        ]
+        order = {"green": 0, "amber": 1, "red": 2}
+        return max((self._health(wf) for wf in live), key=order.__getitem__, default="green")
+
     def _workflow_view(self, wf: Workflow, now: datetime) -> dict[str, Any]:
         state = self._wstate(wf)
         enabled = envmod.workflow_enabled(wf, self.environ)
@@ -450,28 +498,36 @@ class Scheduler:
             "last_questions": state.get("last_questions"),
             "last_spend_usd": state.get("last_spend_usd"),
             "degraded": bool(state.get("last_degraded", False)),
+            "transient": bool(state.get("last_transient", False)),
+            "transient_streak": int(state.get("transient_streak", 0)),
+            "health": self._health(wf),
         }
 
     def _last_run(self) -> dict[str, Any] | None:
-        best: tuple[datetime, Workflow] | None = None
+        """The run the dashboard judges: normally the latest to finish, but a workflow stuck in a blip
+        streak of four or more is shown instead (``ok: false``), so another workflow's clean run cannot
+        hide an outage from a reader that looks at this one field."""
+        finished_runs: list[tuple[datetime, Workflow]] = []
         for wf in self.workflows:
             state = self._wstate(wf)
             finished = store.parse_iso(state.get("last_finished"))
-            if finished is None or state.get("last_interrupted"):
-                continue
-            if best is None or finished > best[0]:
-                best = (finished, wf)
-        if best is None:
+            if finished is not None and not state.get("last_interrupted"):
+                finished_runs.append((finished, wf))
+        if not finished_runs:
             return None
-        finished, wf = best
+        stuck = [
+            (f, wf) for f, wf in finished_runs if self._wstate(wf).get("transient_streak", 0) >= TRANSIENT_RED_STREAK
+        ]
+        finished, wf = max(stuck or finished_runs, key=lambda item: item[0])
         state = self._wstate(wf)
         return {
             "kind": wf.name,
-            "ok": state.get("last_rc") == 0,
+            "ok": state.get("last_rc") == 0 and int(state.get("transient_streak", 0)) < TRANSIENT_RED_STREAK,
             "finished": _epoch(finished),
             "error": state.get("last_error"),
             "rc": state.get("last_rc"),
             "degraded": bool(state.get("last_degraded", False)),
+            "transient": bool(state.get("last_transient", False)),
         }
 
     def _last_ok(self) -> int | None:
@@ -496,9 +552,13 @@ class Scheduler:
                 parts.append(f"{wf.name} running")
             elif view["last_rc"] is None:
                 parts.append(f"{wf.name} waiting for its slot")
+            elif view["transient"]:
+                parts.append(f"{wf.name} network blip x{view['transient_streak']}")
             else:
                 parts.append(f"{wf.name} rc={view['last_rc']} {view['questions_forecast']} q")
-        return "; ".join(parts)[:SUMMARY_MAX_CHARS]
+        health = self._program_health()
+        prefix = f"{health.upper()}: " if health in ("amber", "red") else ""
+        return (prefix + "; ".join(parts))[:SUMMARY_MAX_CHARS]
 
     def status(self, now: datetime, *, stopped: bool = False) -> dict[str, Any]:
         """The status.json payload: the launcher's schema plus the fields kira-earnings reads."""
@@ -515,6 +575,10 @@ class Scheduler:
             "started": _epoch(self.started_at),
             "last_run": self._last_run(),
             "last_ok": self._last_ok(),
+            "health": self._program_health(),
+            "transient_streak": max(
+                (int(self._wstate(wf).get("transient_streak", 0)) for wf in self.workflows), default=0
+            ),
         }
 
     def _write_status(self, now: datetime, *, stopped: bool = False) -> None:

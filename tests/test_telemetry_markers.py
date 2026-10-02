@@ -3369,6 +3369,28 @@ class TestOnlyPosts:
         assert rec["dropped"] == 4
 
 
+# Verbatim from cli.py:_skip_run_for_transient_network; run-level; see docs/telemetry_markers.md "TRANSIENT_NETWORK_SKIP".
+TRANSIENT_NETWORK_SKIP_LINE = (
+    PFX_WARN + "TRANSIENT_NETWORK_SKIP: stage=preflight error=TransientNetworkError "
+    "detail='API identity preflight for www.metaculus.com could not reach it'; the run is skipped and the next slot retries"
+)
+
+
+class TestTransientNetworkSkip:
+    def test_one_match(self):
+        rec = _parse_one(TRANSIENT_NETWORK_SKIP_LINE)
+        assert rec["marker"] == "transient_network_skip"
+        assert rec["stage"] == "preflight"
+        assert rec["error"] == "TransientNetworkError"
+        # Run-level: no question ref, so no qid or id space is stamped.
+        assert "qid" not in rec
+        assert "qid_kind" not in rec
+
+    def test_the_fetch_stage_parses_too(self):
+        rec = _parse_one(TRANSIENT_NETWORK_SKIP_LINE.replace("stage=preflight", "stage=fetch"))
+        assert (rec["stage"], rec["marker"]) == ("fetch", "transient_network_skip")
+
+
 # Verbatim from forecaster.py:forecast_questions; run-level; see docs/telemetry_markers.md "QUESTION_CAP_FORFEIT".
 QUESTION_CAP_FORFEIT_LINE = PFX_WARN + "QUESTION_CAP_FORFEIT: platform=mantic cap=10 total=12 dropped=2 posts=7011,7012"
 QUESTION_CAP_FORFEIT_ONE_POST_LINE = (

@@ -604,6 +604,11 @@ MARKER_SPECS: list[MarkerSpec] = [
         re.compile(r"ONLY_POSTS:\s*requested=(?P<requested>\S+)\s+matched=(?P<matched>\S+)\s+dropped=(?P<dropped>\d+)"),
     ),
     MarkerSpec(
+        "transient_network_skip",
+        # Why: a skipped slot reads as an idle one without it. Receipt: docs/telemetry_markers.md "TRANSIENT_NETWORK_SKIP".
+        re.compile(r"TRANSIENT_NETWORK_SKIP:\s*stage=(?P<stage>\S+)\s+error=(?P<error>\S+)"),
+    ),
+    MarkerSpec(
         "question_cap_forfeit",
         # Why: each row is a paid forecast never made. Receipt: docs/telemetry_markers.md "QUESTION_CAP_FORFEIT".
         re.compile(

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import http.client
 import re
+import socket
+import ssl
 from collections.abc import Iterator
 
 from requests import exceptions as req_exc
@@ -93,3 +95,50 @@ def is_transient_question_fetch_error(exc: BaseException) -> bool:
         return status in _TRANSIENT_FETCH_STATUSES
     message = str(exc).lower()
     return any(token in message for token in _TRANSIENT_MESSAGE_TOKENS)
+
+
+# Exception types that mean "the network was unreachable", as opposed to "something answered and
+# was wrong". requests' ConnectionError covers a DNS failure (urllib3's NameResolutionError rides
+# inside it), a refused or reset connection and a connect timeout; Timeout covers a read timeout;
+# the stdlib types catch the same blips when no requests wrapper is in the way.
+_UNREACHABLE = (
+    req_exc.ConnectionError,
+    req_exc.Timeout,
+    ul3_exc.NameResolutionError,
+    socket.gaierror,
+    TimeoutError,
+    ConnectionError,
+)
+_RELATED_DEPTH = 8
+
+
+def _related(exc: BaseException) -> Iterator[BaseException]:
+    """``exc`` and everything it was raised from or while handling, bounded and cycle-safe.
+
+    ``requests`` raises its ``ConnectionError`` from inside an ``except`` block (so the urllib3 error
+    is its ``__context__``, not its ``__cause__``), so both links are walked.
+    """
+    seen: set[int] = set()
+    queue: list[BaseException] = [exc]
+    while queue and len(seen) < _RELATED_DEPTH:
+        current = queue.pop(0)
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        yield current
+        queue.extend(link for link in (current.__cause__, current.__context__) if link is not None)
+
+
+def is_transient_network_error(exc: BaseException) -> bool:
+    """Whether ``exc`` is a pure connectivity blip: DNS, connect, reset or timeout, and nothing else.
+
+    This decides that a run may be SKIPPED and retried at the next slot instead of failing, so it is
+    deliberately narrow. Any TLS failure anywhere in the chain returns False even though
+    ``requests.exceptions.SSLError`` subclasses ``ConnectionError``: a certificate that does not
+    verify is how an imposter host looks, and the identity preflight exists to stop exactly that. An
+    HTTP error status is False too: something answered. Both stay hard failures.
+    """
+    chain = list(_related(exc))
+    if any(isinstance(link, (req_exc.SSLError, ssl.SSLError, ssl.CertificateError)) for link in chain):
+        return False
+    return any(isinstance(link, _UNREACHABLE) for link in chain)

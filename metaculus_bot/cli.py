@@ -4,12 +4,12 @@ import logging
 import os
 import sys
 from collections.abc import Awaitable, Callable, Iterable
-from typing import Any, Literal, NamedTuple, get_args
+from typing import Any, Literal, NamedTuple, NoReturn, get_args
 
 from forecasting_tools import ForecastReport, MetaculusApi
 
 from metaculus_bot.aggregation_strategies import AggregationStrategy
-from metaculus_bot.api_preflight import verify_api_identity, verify_metaculus_api_identity
+from metaculus_bot.api_preflight import TransientNetworkError, verify_api_identity, verify_metaculus_api_identity
 from metaculus_bot.constants import (
     CREDIT_ALERT_RESUME_DATE,
     DONATED_OPENROUTER_KEY_ENABLED_ENV,
@@ -45,6 +45,7 @@ from metaculus_bot.fallback_openrouter import (
 )
 from metaculus_bot.fetch_hardening import apply_fetch_hardening
 from metaculus_bot.forecaster import TemplateForecaster
+from metaculus_bot.http_status import is_transient_network_error
 from metaculus_bot.llm_configs import (
     DISAGREEMENT_ANALYZER_LLM,
     FORECASTER_LLMS,
@@ -134,6 +135,26 @@ def _configure_process(run_mode: RunMode) -> None:
         verify_api_identity(MANTIC_API_BASE_URL)
     else:
         verify_metaculus_api_identity()
+
+
+def _skip_run_for_transient_network(stage: str, exc: BaseException) -> NoReturn:
+    """End the run as SKIPPED (exit 0) because the network, not the platform, failed.
+
+    Called only for a pure connectivity blip (``is_transient_network_error``: DNS, connect, reset or
+    timeout, never a TLS failure or an HTTP status). Nothing was spent and no credential reached any
+    host, and questions already forecast are skipped on the next run, so retrying at the next slot is
+    free and failing the run would only raise an alarm over a blip (2026-10-02: a WAN reconnect broke
+    DNS for one slot). The ``TRANSIENT_NETWORK_SKIP`` marker is what the Kira scheduler reads to count
+    consecutive blips and escalate. See docs/telemetry_markers.md "TRANSIENT_NETWORK_SKIP".
+    """
+    detail = " ".join(str(exc).split())[:200]
+    logger.warning(
+        "TRANSIENT_NETWORK_SKIP: stage=%s error=%s detail=%r; the run is skipped and the next slot retries",
+        stage,
+        type(exc).__name__,
+        detail,
+    )
+    sys.exit(0)
 
 
 def _parse_post_ids(text: str) -> frozenset[int]:
@@ -385,7 +406,10 @@ def main() -> None:
     fail-shut and identity checks, and only then is any platform token read.
     """
     run_mode, only_posts = _parse_cli_args()
-    _configure_process(run_mode)
+    try:
+        _configure_process(run_mode)
+    except TransientNetworkError as exc:  # no host answered the identity preflight; a wrong host is NOT this class
+        _skip_run_for_transient_network("preflight", exc)
 
     # ERROR now, red exit after publishing, every run mode. See docs/operations.md "the exit ladder".
     fall_cup_reminder = check_fall_cup_reminder(logger)
@@ -416,7 +440,10 @@ def main() -> None:
     metaculus_client = build_mantic_client() if run_mode == "mantic" else None
     if metaculus_client is not None:
         # Two authenticated GETs, still before any spend. See docs/operations.md "Startup checks and robustness rules".
-        preflight_mantic_tournaments(metaculus_client, MANTIC_TOURNAMENT_ID)
+        try:
+            preflight_mantic_tournaments(metaculus_client, MANTIC_TOURNAMENT_ID)
+        except TransientNetworkError as exc:
+            _skip_run_for_transient_network("preflight", exc)
     template_bot = TemplateForecaster(
         research_reports_per_question=1,
         predictions_per_research_report=1,  # Ignored when 'forecasters' present
@@ -436,8 +463,14 @@ def main() -> None:
     donated_below_floor = False
     # Empty until the forecasts return, so a crashed run's summary reads its money against zero questions.
     forecast_reports: list[Any] = []
+    transient_fetch_error: Exception | None = None
     try:
         forecast_reports = _run_forecasts(template_bot, run_mode, only_posts=only_posts)
+    # Boundary: classify, then re-raise anything that is not a pure connectivity blip.
+    except Exception as exc:  # HARNESS-SCAN-EXEMPT-broad-except  # re-raised below unless it is a network blip
+        if not is_transient_network_error(exc):
+            raise
+        transient_fetch_error = exc
     finally:
         donated_below_floor = credit_telemetry.log_end_and_check_floor()
         log_role_spend()
@@ -445,6 +478,9 @@ def main() -> None:
         # Records accumulate in memory all run: without this flush a crash archives nothing.
         if research_writer is not None:
             research_writer.flush()
+
+    if transient_fetch_error is not None:
+        _skip_run_for_transient_network("fetch", transient_fetch_error)
 
     # Emit-then-raise: the breakdown must be recorded before this propagates. See docs/operations.md "the exit ladder".
     report_summary_error: Exception | None = None
