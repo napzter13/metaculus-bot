@@ -22,6 +22,11 @@ and planning docs named here may have moved out of the public repo. Neither is a
   it. Operator SKIPPED: remedies are a partial harvest, a budget-bounded acquire, or instrumentation only, and merging
   Tier-1's host map with gap-fill v2's waits on one. Timing surface, so nothing lands casually.
 - **AskNews DeepNews** as an optional heavy `search_news_deep` tool: blocked on checking its limits and pricing.
+- **LOW: move the PDF decode caps to pypdf's `Configuration` before any pypdf 7.0 bump.** `research/document_text.py`
+  sets the legacy module constants (`ZLIB_MAX_OUTPUT_LENGTH` and three more) as the decompression-bomb guard. pypdf
+  6.19 still honours them (checked 2026-10-02: four limit fields read 8,000,000) but warns they go in 7.0.0; a 7.0
+  upgrade would silently drop the cap. `tests/test_document_text.py` already has the behavioural check that would
+  catch it (an oversized stream must be refused in under 2 s); its attribute-pin test alone would not.
 - **LOW: migrate Gemini grounded search to Google's Interactions API** (`client.aio.interactions.create`, with
   `url_citation` annotations on text), and consider the same migration for gap-fill v2 `read_document` and the
   resolution-source `url_context` rung. The 2026-09-22 probe annotated 7/8 Interactions calls, all of which resolved,
