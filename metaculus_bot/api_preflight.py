@@ -41,11 +41,14 @@ absorber. Retries (with the token attached) belong to ``fetch_hardening``, which
 runs only after identity is established. One shot, fail fast.
 
 One failure class is SKIPPED rather than failed: nothing reachable at all (DNS, connect, reset or
-timeout; ``TransientNetworkError``). No host answered, so no credential went anywhere and no identity
-was contradicted, and the entry point ends the run with exit 0 and a ``TRANSIENT_NETWORK_SKIP`` marker
-so the next slot simply tries again (2026-10-02: a WAN reconnect broke DNS for one slot and failed
-the run). A TLS failure and a wrong answer stay hard failures: a host that answered wrongly is the
-case this gate exists for.
+timeout; ``TransientNetworkError``). No host answered this probe, which carries no credential, and
+no identity was contradicted, so the entry point ends the run with exit 0 and a
+``TRANSIENT_NETWORK_SKIP`` marker and the next slot simply tries again (2026-10-02: a WAN reconnect
+broke DNS for one slot and failed the run). The same classification covers the later authenticated
+requests, and there "skipped" is weaker than "nothing sent": they go only to the host this probe
+vetted, over verified TLS, so a timeout can follow a request that host received, token included. That
+is no leak, but it is not silence either. A TLS failure and a wrong answer stay hard failures: a host
+that answered wrongly is the case this gate exists for.
 
 Signatures observed live:
 
@@ -148,9 +151,10 @@ class TransientNetworkError(ApiIdentityError):
     """The host could not be reached at all (DNS, connect, reset or timeout), so nothing answered.
 
     A subclass of ``ApiIdentityError`` so every existing ``except ApiIdentityError`` still holds, but
-    one the entry point turns into a SKIPPED run instead of a failed one (``cli``): no host replied,
-    which means no credential was sent anywhere and no identity was contradicted, and the next slot
-    simply tries again. A host that DID answer wrongly (parked, hijacked, a bad certificate) is never
+    one the entry point turns into a SKIPPED run instead of a failed one (``cli``): no host replied, so
+    no identity was contradicted, and the next slot simply tries again. The unauthenticated probe sends
+    no credential; on an authenticated check a timeout can follow a request the vetted host did receive
+    over verified TLS. A host that DID answer wrongly (parked, hijacked, a bad certificate) is never
     this class: that stays a hard failure.
     """
 
@@ -185,7 +189,7 @@ def verify_api_identity(base_url: str, *, timeout: float = 20.0) -> None:
         if is_transient_network_error(e):
             raise TransientNetworkError(
                 f"{preflight} could not reach {url!r} ({type(e).__name__}: {e}); no host answered "
-                "(DNS/connect/timeout), so no credential was sent and the run is skipped to retry next slot. "
+                "(DNS/connect/timeout); this probe carries no credential, and the run is skipped to retry next slot. "
                 f"If it persists, check `dig {host}` and the platform's status channels."
             ) from e
         raise ApiIdentityError(

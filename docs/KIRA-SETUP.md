@@ -219,23 +219,34 @@ so new files stay in group `kira-earn-read`), so that group can read them. A run
 ### Network blips (DNS or connection failures)
 
 If the bot cannot reach Metaculus at all (a home-network reconnect, an ISP hiccup), it **skips** that
-run instead of failing it: it logs one `TRANSIENT_NETWORK_SKIP` warning and exits 0, having spent and
-sent nothing, and the next slot tries again. This covers the identity preflight and the question
-fetch. Only a pure connectivity failure counts (DNS, refused or reset connection, timeout). A TLS
-certificate failure, a wrong host answering, or any HTTP error still fails the run, because those mean
-something answered.
+run instead of failing it: it logs one `TRANSIENT_NETWORK_SKIP` warning and exits 0, having spent
+nothing, and the next slot tries again. This covers the identity preflight and the question fetch.
+The preflight carries no credential, and the authenticated requests go only to the host it vetted,
+over verified TLS, so a timeout there can follow a request Metaculus did receive; that is no leak.
+
+Only a pure connectivity failure counts (DNS, refused or reset connection, connect or read timeout),
+decided from the error itself and what it was raised `from`, never from what happened to be raised
+while handling it. A TLS certificate failure, a wrong host answering, any HTTP error and any bug
+still fail the run, because those mean something answered or something is broken. The bot's own
+deadlines (the builtin `TimeoutError`) are not blips either.
+
+**A blip is not an outcome.** It leaves `last_rc`, `error` and `last_finished` as the last real run
+left them, so a 401 followed by a DNS blip is still a failing workflow. The blip is recorded beside
+them: `transient`, `transient_streak` and `transient_note` on the workflow, and `transient: true` on
+`last_run` when the most recent finished run was a blip.
 
 The scheduler counts consecutive skipped slots per workflow (a real run of any kind ends the count; a
 restart keeps it) and reports:
 
 | Consecutive blips | `health` | Effect |
 |---|---|---|
-| 1 | `green` | nothing: `last_rc` 0, `last_run.ok` true, `last_run.transient` true, `error` says "transient network failure ... 1 in a row" |
-| 2 or 3 | `amber` | the summary starts `AMBER:`; `last_run.ok` stays true |
-| 4 or more | `red` | the summary starts `RED:`; `last_run.ok` becomes false, which is what the dashboard's red rule reads |
+| 1 | `green` | nothing changes except the `transient` fields |
+| 2 or 3 | `amber` | the summary starts `AMBER:` |
+| 4 or more | `red` | the summary starts `RED: network blips x4; check the connection, or check the configured host (METACULUS_API_BASE_URL)`, and `last_run` shows that workflow with `ok: false`, which is what the dashboard's red rule reads |
 
 At the tournament's 20-minute slots that is amber after about 20 to 40 minutes of outage and red after
-about an hour. A blip never advances `last_ok`, since no forecast was made.
+about an hour. Red names the configured host because a flat outage and a wrong `METACULUS_API_BASE_URL`
+look the same from here. A blip never advances `last_ok`, since no forecast was made.
 
 ### status.json
 
@@ -251,7 +262,7 @@ second.
 | `configured` | true when `METACULUS_TOKEN` and `OPENROUTER_API_KEY` are both set |
 | `missing` | the gate keys not yet set (names only) |
 | `mode` | the seven cost flags as the tournament run sees them |
-| `workflows.<tournament\|minibench\|mantic>` | `enabled`, `configured`, `next_slot`, `last_started`, `last_finished`, `last_rc`, `questions_forecast` and `spend_usd` (totals since the data dir began), `error`, `running`, plus `last_questions`, `last_spend_usd`, `degraded`, `transient` (the last run was a skipped blip), `transient_streak` and `health` |
+| `workflows.<tournament\|minibench\|mantic>` | `enabled`, `configured`, `next_slot`, `last_started`, `last_finished`, `last_rc`, `questions_forecast` and `spend_usd` (totals since the data dir began), `error`, `running`, plus `last_questions`, `last_spend_usd`, `degraded`, `transient` (the last run was a skipped blip), `transient_streak`, `transient_note` and `health` |
 | `heartbeat` | epoch seconds of the last heartbeat write |
 | `started` | epoch seconds the program process started |
 | `last_run` | the most recently finished run: `kind`, `ok`, `finished` (epoch), `error`, plus `rc`, `degraded` and `transient`; `null` before any run. A workflow in a red blip streak is shown here in preference, so another workflow's clean run cannot hide it |

@@ -99,24 +99,29 @@ def is_transient_question_fetch_error(exc: BaseException) -> bool:
 
 # Exception types that mean "the network was unreachable", as opposed to "something answered and
 # was wrong". requests' ConnectionError covers a DNS failure (urllib3's NameResolutionError rides
-# inside it), a refused or reset connection and a connect timeout; Timeout covers a read timeout;
-# the stdlib types catch the same blips when no requests wrapper is in the way.
+# inside it), a refused or reset connection and a connect timeout; requests' Timeout covers a read
+# timeout; urllib3's ConnectTimeoutError is the same connect timeout when requests is not wrapping it.
+#
+# The builtin TimeoutError is deliberately NOT here. On Python 3.11+ it is also what
+# ``asyncio.wait_for`` raises, so listing it would class one of the bot's own deadlines as a blip.
 _UNREACHABLE = (
     req_exc.ConnectionError,
     req_exc.Timeout,
     ul3_exc.NameResolutionError,
+    ul3_exc.ConnectTimeoutError,
     socket.gaierror,
-    TimeoutError,
     ConnectionError,
 )
 _RELATED_DEPTH = 8
+_TLS_FAILURES = (req_exc.SSLError, ssl.SSLError, ssl.CertificateError)
 
 
 def _related(exc: BaseException) -> Iterator[BaseException]:
-    """``exc`` and everything it was raised from or while handling, bounded and cycle-safe.
+    """``exc`` and everything it was raised from OR while handling, bounded and cycle-safe.
 
-    ``requests`` raises its ``ConnectionError`` from inside an ``except`` block (so the urllib3 error
-    is its ``__context__``, not its ``__cause__``), so both links are walked.
+    Used only for the TLS veto. ``__context__`` is "raised while handling this", which says nothing
+    about WHY the outer exception happened, so it must never make an error transient; but a TLS failure
+    anywhere nearby is reason enough to refuse the skip.
     """
     seen: set[int] = set()
     queue: list[BaseException] = [exc]
@@ -133,12 +138,15 @@ def is_transient_network_error(exc: BaseException) -> bool:
     """Whether ``exc`` is a pure connectivity blip: DNS, connect, reset or timeout, and nothing else.
 
     This decides that a run may be SKIPPED and retried at the next slot instead of failing, so it is
-    deliberately narrow. Any TLS failure anywhere in the chain returns False even though
-    ``requests.exceptions.SSLError`` subclasses ``ConnectionError``: a certificate that does not
-    verify is how an imposter host looks, and the identity preflight exists to stop exactly that. An
-    HTTP error status is False too: something answered. Both stay hard failures.
+    deliberately narrow, and it decides from the exception itself and its ``__cause__`` chain only
+    (``raise ... from``). A NameError, KeyError or HTTP 401 raised while a ConnectionError was being
+    handled has that ConnectionError as its ``__context__``, and is a bug or an answer, not a blip.
+
+    Any TLS failure anywhere in the chain, ``__context__`` included, returns False even though
+    ``requests.exceptions.SSLError`` subclasses ``ConnectionError``: a certificate that does not verify
+    is how an imposter host looks, and the identity preflight exists to stop exactly that. An HTTP error
+    status is False too: something answered. Both stay hard failures.
     """
-    chain = list(_related(exc))
-    if any(isinstance(link, (req_exc.SSLError, ssl.SSLError, ssl.CertificateError)) for link in chain):
+    if any(isinstance(link, _TLS_FAILURES) for link in _related(exc)):
         return False
-    return any(isinstance(link, _UNREACHABLE) for link in chain)
+    return any(isinstance(link, _UNREACHABLE) for link in iter_cause_chain(exc))

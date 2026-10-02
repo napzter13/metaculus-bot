@@ -9,13 +9,14 @@ exactly those from reaching a token.
 
 from __future__ import annotations
 
+import asyncio
 import socket
 import ssl
 from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
-from urllib3.exceptions import MaxRetryError, NameResolutionError
+from urllib3.exceptions import ConnectTimeoutError, MaxRetryError, NameResolutionError
 
 from metaculus_bot.api_preflight import (
     ApiIdentityError,
@@ -41,9 +42,9 @@ class TestClassifier:
             requests.exceptions.ConnectTimeout("connect timed out"),
             requests.exceptions.ReadTimeout("read timed out"),
             requests.exceptions.ConnectionError("Connection refused"),
+            ConnectTimeoutError(None, "connect timed out"),
             socket.gaierror(-2, "Name or service not known"),
             ConnectionResetError("reset by peer"),
-            TimeoutError("timed out"),
         ],
         ids=lambda e: type(e).__name__,
     )
@@ -60,6 +61,7 @@ class TestClassifier:
             requests.exceptions.InvalidURL("bad"),
             ValueError("not a network problem"),
             RuntimeError("a bug"),
+            TimeoutError("timed out"),
         ],
         ids=lambda e: type(e).__name__,
     )
@@ -74,10 +76,61 @@ class TestClassifier:
         wrapped.__cause__ = requests.exceptions.SSLError("inner certificate failure")
         assert is_transient_network_error(wrapped) is False
 
-    def test_the_chain_is_walked_through_cause_and_context(self) -> None:
+    def test_a_cause_chain_is_followed(self) -> None:
+        """``raise ... from`` says WHY: a wrapper raised from a DNS failure is a DNS failure."""
         outer = RuntimeError("fetch failed")
-        outer.__context__ = socket.gaierror(-3, "Temporary failure in name resolution")  # implicit chaining
+        outer.__cause__ = socket.gaierror(-3, "Temporary failure in name resolution")
         assert is_transient_network_error(outer) is True
+
+    @staticmethod
+    def _raised_while_handling_a_dns_failure(bug: BaseException) -> BaseException:
+        """``bug`` as Python really chains it: raised inside an ``except`` for a connection error."""
+        try:
+            try:
+                raise _dns_failure()
+            except requests.exceptions.ConnectionError:
+                raise bug  # noqa: B904  # the implicit __context__ is exactly the case under test
+        except BaseException as caught:  # noqa: BLE001  # returned for the caller to classify
+            return caught
+
+    @pytest.mark.parametrize(
+        "bug",
+        [
+            NameError("name 'x' is not defined"),
+            KeyError("missing"),
+            requests.exceptions.HTTPError("401 Client Error: Unauthorized"),
+            RuntimeError("a bug in the handler"),
+        ],
+        ids=lambda e: type(e).__name__,
+    )
+    def test_an_error_raised_while_handling_a_network_error_is_not_a_blip(self, bug: BaseException) -> None:
+        """A bug or an HTTP answer raised from inside the handler has the ConnectionError as its
+        ``__context__`` only. Calling it transient would skip, with exit 0, a run that is really broken."""
+        caught = self._raised_while_handling_a_dns_failure(bug)
+        assert isinstance(caught.__context__, requests.exceptions.ConnectionError), "the fixture must chain for real"
+        assert is_transient_network_error(caught) is False
+
+    def test_a_tls_failure_in_the_context_still_vetoes_a_connection_error(self) -> None:
+        """The veto reads both links, unlike the transient test: a ConnectionError raised while handling a
+        certificate failure is the imposter case, not a blip."""
+        try:
+            try:
+                raise requests.exceptions.SSLError("certificate verify failed")
+            except requests.exceptions.SSLError:
+                raise requests.exceptions.ConnectionError("outer")  # noqa: B904  # implicit context under test
+        except requests.exceptions.ConnectionError as outer:
+            assert is_transient_network_error(outer) is False  # noqa: PT017  # classify the real chained exception
+
+    def test_the_builtin_timeout_is_not_a_network_blip(self) -> None:
+        """On 3.11+ ``asyncio.wait_for`` raises the builtin TimeoutError, so counting it would class one of
+        the bot's own deadlines as a connectivity failure."""
+
+        async def too_slow() -> None:
+            await asyncio.wait_for(asyncio.sleep(5), timeout=0.001)
+
+        with pytest.raises(TimeoutError) as excinfo:
+            asyncio.run(too_slow())
+        assert is_transient_network_error(excinfo.value) is False
 
     def test_a_self_referencing_chain_terminates(self) -> None:
         loop = RuntimeError("loop")
@@ -96,7 +149,7 @@ class TestPreflight:
             verify_metaculus_api_identity()
         assert isinstance(excinfo.value, ApiIdentityError), "existing `except ApiIdentityError` handlers still hold"
         assert excinfo.value.__cause__ is original
-        assert "no credential was sent" in str(excinfo.value)
+        assert "this probe carries no credential" in str(excinfo.value)
 
     def test_a_timeout_is_transient(self) -> None:
         with _get_raising(requests.exceptions.ConnectTimeout("slow")), pytest.raises(TransientNetworkError):

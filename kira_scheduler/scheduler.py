@@ -45,6 +45,9 @@ SUMMARY_MAX_CHARS = 200
 # unwell. One blip is ordinary (a WAN reconnect), two in a row is worth a look, four is an outage.
 TRANSIENT_AMBER_STREAK = 2
 TRANSIENT_RED_STREAK = 4
+# What a repeated blip most likely is. A flat outage and a wrong host look the same from here, and the
+# host is configurable (the bot reads METACULUS_API_BASE_URL), so the red message names both.
+BLIP_HOST_HINT = "check the connection, or check the configured host (METACULUS_API_BASE_URL)"
 
 CommandFor = Callable[[Workflow], list[str]]
 
@@ -60,6 +63,17 @@ class _Run:
     term_sent: datetime | None = None
     killed: bool = False
     reason: str | None = None  # "timeout" | "shutdown"
+
+
+@dataclass(frozen=True)
+class _Finished:
+    """What is known about a run that has just ended."""
+
+    run: _Run
+    rc: int
+    error: str | None
+    summary: dict[str, Any]
+    at: datetime
 
 
 @dataclass
@@ -360,6 +374,26 @@ class Scheduler:
                 run.killed = True
                 self._signal_group(run.proc, signal.SIGKILL)
 
+    def _record_real_run(self, wf: Workflow, done: _Finished) -> None:
+        state = self._wstate(wf)
+        interrupted = done.run.reason == "shutdown"
+        state.update(
+            last_finished=store.iso(done.at),
+            last_rc=done.rc,
+            last_error=done.error,
+            last_interrupted=interrupted,
+            last_degraded=bool(done.summary["degraded"]) and done.rc != 0 and not interrupted,
+            pid=None,
+        )
+        questions = done.summary["questions"]
+        if not interrupted and questions is not None:
+            state["last_questions"] = questions
+            state["last_spend_usd"] = done.summary["spend_usd"]
+            state["questions_total"] = int(state.get("questions_total", 0)) + questions
+            state["spend_total"] = round(float(state.get("spend_total", 0.0)) + (done.summary["spend_usd"] or 0.0), 4)
+        if done.rc == 0 and not interrupted and done.run.reason is None:
+            state["last_ok_finished"] = store.iso(done.at)
+
     def _outcome(
         self, wf: Workflow, run: _Run, rc_value: int, summary: dict[str, Any]
     ) -> tuple[str | None, dict[str, str] | None]:
@@ -401,23 +435,13 @@ class Scheduler:
         summary = store.summarize_log(run.log_path)
         state = self._wstate(wf)
         rc_value = rc if rc is not None else -1
-        interrupted = run.reason == "shutdown"
         error, transient = self._outcome(wf, run, rc_value, summary)
-        state.update(
-            last_finished=store.iso(now),
-            last_rc=rc_value,
-            last_error=error,
-            last_interrupted=interrupted,
-            last_degraded=bool(summary["degraded"]) and rc_value != 0 and not interrupted,
-            pid=None,
-        )
-        if not interrupted and summary["questions"] is not None:
-            state["last_questions"] = summary["questions"]
-            state["last_spend_usd"] = summary["spend_usd"]
-            state["questions_total"] = int(state.get("questions_total", 0)) + summary["questions"]
-            state["spend_total"] = round(float(state.get("spend_total", 0.0)) + (summary["spend_usd"] or 0.0), 4)
-        if rc_value == 0 and not interrupted and run.reason is None and transient is None:
-            state["last_ok_finished"] = store.iso(now)  # a skipped blip is not a successful forecast run
+        if transient is not None:
+            # A blip is not an outcome of the workflow, so last_rc, last_error and last_finished keep
+            # describing the last REAL run: a 401 followed by a DNS blip is still a failing workflow.
+            state.update(last_transient_finished=store.iso(now), transient_note=error, pid=None)
+        else:
+            self._record_real_run(wf, _Finished(run, rc_value, error, summary, now))
         self._save_state()
         rt = self._rt[wf.name]
         rt.run = None
@@ -500,13 +524,41 @@ class Scheduler:
             "degraded": bool(state.get("last_degraded", False)),
             "transient": bool(state.get("last_transient", False)),
             "transient_streak": int(state.get("transient_streak", 0)),
+            "transient_note": state.get("transient_note") if state.get("last_transient") else None,
             "health": self._health(wf),
         }
 
+    def _stuck_workflow(self) -> tuple[datetime, Workflow] | None:
+        """The workflow in a red blip streak whose blip finished most recently, if any."""
+        stuck: list[tuple[datetime, Workflow]] = []
+        for wf in self.workflows:
+            state = self._wstate(wf)
+            finished = store.parse_iso(state.get("last_transient_finished"))
+            if finished is not None and int(state.get("transient_streak", 0)) >= TRANSIENT_RED_STREAK:
+                stuck.append((finished, wf))
+        return max(stuck, key=lambda item: item[0]) if stuck else None
+
     def _last_run(self) -> dict[str, Any] | None:
-        """The run the dashboard judges: normally the latest to finish, but a workflow stuck in a blip
-        streak of four or more is shown instead (``ok: false``), so another workflow's clean run cannot
-        hide an outage from a reader that looks at this one field."""
+        """The run the dashboard judges.
+
+        Normally the real run that finished last, whose ``ok`` and ``error`` a blip never changes. But a
+        workflow in a red blip streak (four or more) is shown instead, with ``ok: false``, even if it has
+        never had a real run, so another workflow's clean run cannot hide an outage from a reader that
+        looks at this one field. ``transient`` says the most recent finished run was a blip.
+        """
+        stuck = self._stuck_workflow()
+        if stuck is not None:
+            finished, wf = stuck
+            state = self._wstate(wf)
+            return {
+                "kind": wf.name,
+                "ok": False,
+                "finished": _epoch(finished),
+                "error": f"{state.get('transient_note')}; {BLIP_HOST_HINT}",
+                "rc": state.get("last_rc"),
+                "degraded": False,
+                "transient": True,
+            }
         finished_runs: list[tuple[datetime, Workflow]] = []
         for wf in self.workflows:
             state = self._wstate(wf)
@@ -515,14 +567,11 @@ class Scheduler:
                 finished_runs.append((finished, wf))
         if not finished_runs:
             return None
-        stuck = [
-            (f, wf) for f, wf in finished_runs if self._wstate(wf).get("transient_streak", 0) >= TRANSIENT_RED_STREAK
-        ]
-        finished, wf = max(stuck or finished_runs, key=lambda item: item[0])
+        finished, wf = max(finished_runs, key=lambda item: item[0])
         state = self._wstate(wf)
         return {
             "kind": wf.name,
-            "ok": state.get("last_rc") == 0 and int(state.get("transient_streak", 0)) < TRANSIENT_RED_STREAK,
+            "ok": state.get("last_rc") == 0,
             "finished": _epoch(finished),
             "error": state.get("last_error"),
             "rc": state.get("last_rc"),
@@ -550,14 +599,18 @@ class Scheduler:
                 parts.append(f"{wf.name} not configured")
             elif view["running"]:
                 parts.append(f"{wf.name} running")
+            elif view["transient"]:  # before the "no run yet" case: a blip is a run that has happened
+                parts.append(f"{wf.name} network blip x{view['transient_streak']}")
             elif view["last_rc"] is None:
                 parts.append(f"{wf.name} waiting for its slot")
-            elif view["transient"]:
-                parts.append(f"{wf.name} network blip x{view['transient_streak']}")
             else:
                 parts.append(f"{wf.name} rc={view['last_rc']} {view['questions_forecast']} q")
         health = self._program_health()
         prefix = f"{health.upper()}: " if health in ("amber", "red") else ""
+        stuck = self._stuck_workflow()
+        if stuck is not None:
+            streak = int(self._wstate(stuck[1]).get("transient_streak", 0))
+            prefix = f"RED: network blips x{streak}; {BLIP_HOST_HINT}. "
         return (prefix + "; ".join(parts))[:SUMMARY_MAX_CHARS]
 
     def status(self, now: datetime, *, stopped: bool = False) -> dict[str, Any]:

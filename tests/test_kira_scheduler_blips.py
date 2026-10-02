@@ -44,23 +44,28 @@ def _blipping(tmp_path: Path, **kwargs: Any) -> Scheduler:
     return sched
 
 
+_HINT = "or check the configured host (METACULUS_API_BASE_URL)"
+
+
 class TestThresholds:
     def test_the_thresholds_are_two_and_four(self) -> None:
         assert (TRANSIENT_AMBER_STREAK, TRANSIENT_RED_STREAK) == (2, 4)
 
-    def test_one_blip_is_not_a_failed_run(self, tmp_path: Path) -> None:
+    def test_one_blip_is_not_a_failed_run_and_changes_no_outcome_field(self, tmp_path: Path) -> None:
         sched = _blipping(tmp_path)
         _run_slots(sched, 1)
         status = _status(sched)
         view = status["workflows"]["tournament"]
-        assert view["last_rc"] == 0, "the bot exited 0: the run was skipped, not failed"
+        # A blip is not an outcome: with no real run yet, the outcome fields are still empty.
+        assert (view["last_rc"], view["error"], view["last_finished"]) == (None, None, None)
         assert view["transient"] is True
         assert view["transient_streak"] == 1
-        assert view["error"].startswith("transient network failure at preflight (TransientNetworkError), 1 in a row")
+        assert view["transient_note"].startswith(
+            "transient network failure at preflight (TransientNetworkError), 1 in a row"
+        )
         assert view["health"] == "green"
         assert status["health"] == "green"
-        assert status["last_run"]["ok"] is True
-        assert status["last_run"]["transient"] is True
+        assert status["last_run"] is None, "no real run has finished, so the dashboard reads unknown, not failed"
         assert not status["summary"].startswith(("AMBER", "RED"))
         assert "network blip x1" in status["summary"]
 
@@ -78,24 +83,34 @@ class TestThresholds:
         assert status["health"] == "amber"
         assert status["transient_streak"] == 2
         assert status["summary"].startswith("AMBER: ")
-        assert status["last_run"]["ok"] is True, "amber is advisory; the run itself is still not a failure"
+        assert _HINT not in status["summary"], "amber is advisory; the host hint belongs to red"
 
     def test_three_is_still_amber(self, tmp_path: Path) -> None:
         sched = _blipping(tmp_path)
         _run_slots(sched, 3)
         assert _status(sched)["health"] == "amber"
 
-    def test_four_in_a_row_is_red_and_fails_last_run(self, tmp_path: Path) -> None:
+    def test_four_in_a_row_is_red_and_fails_last_run_even_with_no_real_run_before(self, tmp_path: Path) -> None:
         sched = _blipping(tmp_path)
         _run_slots(sched, 4)
         status = _status(sched)
         assert status["health"] == "red"
         assert status["workflows"]["tournament"]["health"] == "red"
-        assert status["summary"].startswith("RED: ")
         assert status["last_run"]["ok"] is False, "the dashboard's existing red rule keys on last_run.ok"
         assert status["last_run"]["transient"] is True
+        assert status["last_run"]["kind"] == "tournament"
         assert "4 in a row" in status["last_run"]["error"]
-        assert status["last_run"]["rc"] == 0
+        assert status["last_run"]["rc"] is None, "still no real run, so no exit code to report"
+        assert status["last_run"]["finished"] == int(_t(11, 4).timestamp())
+
+    def test_the_red_summary_and_error_name_the_host_as_a_possible_cause(self, tmp_path: Path) -> None:
+        sched = _blipping(tmp_path)
+        _run_slots(sched, 4)
+        status = _status(sched)
+        assert status["summary"].startswith("RED: network blips x4;")
+        assert _HINT in status["summary"]
+        assert _HINT in status["last_run"]["error"]
+        assert len(status["summary"]) <= 200
 
 
 class TestWhatEndsAStreak:
@@ -128,11 +143,30 @@ class TestWhatEndsAStreak:
         assert status["last_run"]["transient"] is False
         assert status["last_ok"] == int(_t(11, 4).timestamp())
 
-    def test_a_blip_after_a_success_keeps_the_older_last_ok(self, tmp_path: Path) -> None:
+    def test_a_blip_after_a_success_leaves_the_success_as_the_last_run(self, tmp_path: Path) -> None:
         sched = self._walk(tmp_path, ["ok", "blip"])
         status = _status(sched)
         assert status["last_ok"] == int(_t(10, 4).timestamp())
         assert status["workflows"]["tournament"]["transient_streak"] == 1
+        last = status["last_run"]
+        assert (last["ok"], last["rc"], last["error"]) == (True, 0, None)
+        assert last["finished"] == int(_t(10, 4).timestamp()), "the blip did not become the last real run"
+        assert last["transient"] is True, "but the most recent finished run WAS a blip, and says so"
+
+    def test_a_failure_followed_by_a_blip_stays_red(self, tmp_path: Path) -> None:
+        """A 401 (or any real failure) then a DNS blip: the blip must not read as recovery."""
+        sched = self._walk(tmp_path, ["fail", "blip"])
+        status = _status(sched)
+        view = status["workflows"]["tournament"]
+        assert view["last_rc"] == 1, "the blip leaves last_rc as the failure left it"
+        assert view["error"].startswith("exit 1"), view["error"]
+        assert view["transient"] is True
+        assert view["health"] == "red"
+        assert status["health"] == "red"
+        assert status["last_run"]["ok"] is False
+        assert status["last_run"]["rc"] == 1
+        assert status["last_run"]["error"].startswith("exit 1")
+        assert status["last_run"]["finished"] == int(_t(10, 4).timestamp()), "the failure, not the blip"
 
     def test_a_real_failure_ends_the_streak_and_is_red_not_a_blip(self, tmp_path: Path) -> None:
         sched = self._walk(tmp_path, ["blip", "blip", "fail"])

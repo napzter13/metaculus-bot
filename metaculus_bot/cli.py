@@ -141,11 +141,15 @@ def _skip_run_for_transient_network(stage: str, exc: BaseException) -> NoReturn:
     """End the run as SKIPPED (exit 0) because the network, not the platform, failed.
 
     Called only for a pure connectivity blip (``is_transient_network_error``: DNS, connect, reset or
-    timeout, never a TLS failure or an HTTP status). Nothing was spent and no credential reached any
-    host, and questions already forecast are skipped on the next run, so retrying at the next slot is
-    free and failing the run would only raise an alarm over a blip (2026-10-02: a WAN reconnect broke
-    DNS for one slot). The ``TRANSIENT_NETWORK_SKIP`` marker is what the Kira scheduler reads to count
-    consecutive blips and escalate. See docs/telemetry_markers.md "TRANSIENT_NETWORK_SKIP".
+    timeout, never a TLS failure or an HTTP status). Nothing was spent. No credential went to an
+    UNVERIFIED host: the identity probe carries none, and every authenticated request goes only to the
+    host that probe vetted, over verified TLS. That is not the same as "nothing was transmitted": a
+    ReadTimeout on an authenticated request means the vetted host may well have received it, token
+    included. What the skip means is that there is nothing to repair, and questions already forecast
+    are skipped on the next run, so retrying at the next slot is free while failing the run would only
+    raise an alarm over a blip (2026-10-02: a WAN reconnect broke DNS for one slot). The
+    ``TRANSIENT_NETWORK_SKIP`` marker is what the Kira scheduler reads to count consecutive blips and
+    escalate. See docs/telemetry_markers.md "TRANSIENT_NETWORK_SKIP".
     """
     detail = " ".join(str(exc).split())[:200]
     logger.warning(
