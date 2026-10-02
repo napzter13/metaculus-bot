@@ -240,6 +240,44 @@ class TestAcrossRestartsAndWorkflows:
         assert status["last_run"]["kind"] == "tournament"
         assert status["last_run"]["ok"] is False, "the red workflow must be what the single last_run field shows"
 
+    def _after_four_blips(self, tmp_path: Path) -> None:
+        sched = _blipping(tmp_path)
+        _run_slots(sched, 4)
+        assert _status(sched)["health"] == "red"
+        sched.shutdown(_t(11, 30))
+
+    def _restarted(self, tmp_path: Path, environ: dict[str, str]) -> Scheduler:
+        sched = _make(tmp_path, code=_BLIP_CHILD, environ=environ)
+        sched.startup(_t(11, 31))
+        return sched
+
+    def test_a_workflow_disabled_after_blips_stops_being_red(self, tmp_path: Path) -> None:
+        self._after_four_blips(tmp_path)
+        sched = self._restarted(tmp_path, {**_ONLY_TOURNAMENT, "WORKFLOW_TOURNAMENT_ENABLED": "false"})
+        status = _status(sched)
+        assert status["health"] == "green", "everything is off, so nothing is unwell"
+        assert not status["summary"].startswith("RED")
+        assert status["last_run"] is None, "a disabled workflow's old streak is not what the dashboard judges"
+        assert status["transient_streak"] == 0
+        assert status["workflows"]["tournament"]["enabled"] is False
+
+    def test_a_workflow_that_lost_its_keys_stops_being_red(self, tmp_path: Path) -> None:
+        self._after_four_blips(tmp_path)
+        sched = self._restarted(tmp_path, {**_ONLY_TOURNAMENT, "OPENROUTER_API_KEY": ""})
+        status = _status(sched)
+        assert status["health"] == "waiting"
+        assert status["last_run"] is None
+        assert status["summary"].startswith("not configured")
+
+    def test_re_enabling_it_brings_the_red_back_until_a_real_run_ends_the_streak(self, tmp_path: Path) -> None:
+        self._after_four_blips(tmp_path)
+        off = self._restarted(tmp_path, {**_ONLY_TOURNAMENT, "WORKFLOW_TOURNAMENT_ENABLED": "false"})
+        off.shutdown(_t(11, 32))
+        on = self._restarted(tmp_path, _ONLY_TOURNAMENT)
+        status = _status(on)
+        assert status["health"] == "red", "the streak was kept in the state while the workflow was off"
+        assert status["last_run"]["ok"] is False
+
     def test_a_program_without_keys_is_waiting_not_green(self, tmp_path: Path) -> None:
         sched = _make(tmp_path, environ={"METACULUS_TOKEN": "", "OPENROUTER_API_KEY": ""})
         sched.startup(_t(10, 3, 30))

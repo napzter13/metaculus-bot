@@ -228,7 +228,9 @@ Only a pure connectivity failure counts (DNS, refused or reset connection, conne
 decided from the error itself and what it was raised `from`, never from what happened to be raised
 while handling it. A TLS certificate failure, a wrong host answering, any HTTP error and any bug
 still fail the run, because those mean something answered or something is broken. The bot's own
-deadlines (the builtin `TimeoutError`) are not blips either.
+deadlines (the builtin `TimeoutError`) are not blips either. A connection error that escapes the
+question fetch **after** the run has already made a model call is not skipped either: it cost money, so
+it fails the run like any other real failure.
 
 **A blip is not an outcome.** It leaves `last_rc`, `error` and `last_finished` as the last real run
 left them, so a 401 followed by a DNS blip is still a failing workflow. The blip is recorded beside
@@ -245,7 +247,9 @@ restart keeps it) and reports:
 | 4 or more | `red` | the summary starts `RED: network blips x4; check the connection, or check the configured host (METACULUS_API_BASE_URL)`, and `last_run` shows that workflow with `ok: false`, which is what the dashboard's red rule reads |
 
 At the tournament's 20-minute slots that is amber after about 20 to 40 minutes of outage and red after
-about an hour. Red names the configured host because a flat outage and a wrong `METACULUS_API_BASE_URL`
+about an hour. Only workflows that would run (enabled, with their keys) count: one you disable or
+whose keys you remove stops turning the summary red, and re-enabling it brings the red back until a
+real run ends the streak. Red names the configured host because a flat outage and a wrong `METACULUS_API_BASE_URL`
 look the same from here. A blip never advances `last_ok`, since no forecast was made.
 
 ### status.json

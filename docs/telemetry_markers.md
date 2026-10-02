@@ -1160,7 +1160,8 @@ string) and an empty match is `none`.
 A run skipped, not failed, because the network was unreachable (`cli.py:_skip_run_for_transient_network`):
 one WARNING and exit 0, at most once per run. `stage` is `preflight` (the platform identity check, or
 Mantic's tournament check, which run before any spend) or `fetch` (the question-list fetch), and `error`
-is the exception class name. Only a pure connectivity failure qualifies (`http_status.is_transient_network_error`:
+is the exception class name. The `fetch` stage is skipped only if the run booked no LLM call yet: a
+connection error escaping after spend fails the run and emits no marker. Only a pure connectivity failure qualifies (`http_status.is_transient_network_error`:
 DNS, connect, reset or timeout). A TLS failure and any HTTP status stay hard failures, because a host
 that answered wrongly is what the identity preflight exists to catch. Run-level, so no question ref.
 The Kira scheduler counts these across slots (docs/KIRA-SETUP.md "Network blips"); without the marker a

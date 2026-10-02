@@ -494,16 +494,19 @@ class Scheduler:
             return "red"
         return "amber" if streak >= TRANSIENT_AMBER_STREAK else "green"
 
-    def _program_health(self) -> str:
-        if envmod.program_missing(self.environ):
-            return "waiting"
-        live = [
+    def _live_workflows(self) -> list[Workflow]:
+        """Workflows that would run at their next slot: enabled and holding their gate keys."""
+        return [
             wf
             for wf in self.workflows
             if envmod.workflow_enabled(wf, self.environ) and not envmod.workflow_missing(wf, self.environ)
         ]
+
+    def _program_health(self) -> str:
+        if envmod.program_missing(self.environ):
+            return "waiting"
         order = {"green": 0, "amber": 1, "red": 2}
-        return max((self._health(wf) for wf in live), key=order.__getitem__, default="green")
+        return max((self._health(wf) for wf in self._live_workflows()), key=order.__getitem__, default="green")
 
     def _workflow_view(self, wf: Workflow, now: datetime) -> dict[str, Any]:
         state = self._wstate(wf)
@@ -529,9 +532,14 @@ class Scheduler:
         }
 
     def _stuck_workflow(self) -> tuple[datetime, Workflow] | None:
-        """The workflow in a red blip streak whose blip finished most recently, if any."""
+        """The LIVE workflow in a red blip streak whose blip finished most recently, if any.
+
+        A workflow the operator has since disabled, or whose keys are gone, is not stuck, it is off: its
+        old streak must not keep the summary RED and ``last_run.ok`` false. The streak is kept in the
+        state, so re-enabling it brings the red back until a real run ends it.
+        """
         stuck: list[tuple[datetime, Workflow]] = []
-        for wf in self.workflows:
+        for wf in self._live_workflows():
             state = self._wstate(wf)
             finished = store.parse_iso(state.get("last_transient_finished"))
             if finished is not None and int(state.get("transient_streak", 0)) >= TRANSIENT_RED_STREAK:
@@ -630,7 +638,7 @@ class Scheduler:
             "last_ok": self._last_ok(),
             "health": self._program_health(),
             "transient_streak": max(
-                (int(self._wstate(wf).get("transient_streak", 0)) for wf in self.workflows), default=0
+                (int(self._wstate(wf).get("transient_streak", 0)) for wf in self._live_workflows()), default=0
             ),
         }
 

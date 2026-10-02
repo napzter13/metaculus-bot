@@ -35,6 +35,7 @@ from metaculus_bot.credit_telemetry import (
     install_role_spend_tracker,
     log_role_spend,
     log_run_summary,
+    role_spend_rows,
 )
 from metaculus_bot.fallback_openrouter import (
     check_deprecation_alerts_and_exit,
@@ -137,17 +138,31 @@ def _configure_process(run_mode: RunMode) -> None:
         verify_metaculus_api_identity()
 
 
+def _llm_calls_booked() -> bool:
+    """Whether this process has booked any LLM completion in the spend ledger.
+
+    Read after ``_forecast_with_callback_drain`` has drained litellm's callbacks (it does so in a
+    ``finally``, so also when an exception escapes), which is what makes the ledger current. A call
+    that was cut off in flight is not booked, so this is "no completed call", the honest limit.
+    """
+    return any(row.calls > 0 for row in role_spend_rows())
+
+
 def _skip_run_for_transient_network(stage: str, exc: BaseException) -> NoReturn:
     """End the run as SKIPPED (exit 0) because the network, not the platform, failed.
 
     Called only for a pure connectivity blip (``is_transient_network_error``: DNS, connect, reset or
-    timeout, never a TLS failure or an HTTP status). Nothing was spent. No credential went to an
-    UNVERIFIED host: the identity probe carries none, and every authenticated request goes only to the
-    host that probe vetted, over verified TLS. That is not the same as "nothing was transmitted": a
-    ReadTimeout on an authenticated request means the vetted host may well have received it, token
-    included. What the skip means is that there is nothing to repair, and questions already forecast
-    are skipped on the next run, so retrying at the next slot is free while failing the run would only
-    raise an alarm over a blip (2026-10-02: a WAN reconnect broke DNS for one slot). The
+    timeout, never a TLS failure or an HTTP status). The two stages differ in what was spent. The
+    preflight runs before any model call. The fetch stage is only skipped when this process booked no
+    LLM call (``_llm_calls_booked``): a connection error that escapes after spend is a real failure with
+    real cost, so ``main`` re-raises it instead of calling it a blip.
+
+    No credential went to an UNVERIFIED host: the identity probe carries none, and every authenticated
+    request goes only to the host that probe vetted, over verified TLS. That is not the same as "nothing
+    was transmitted": a ReadTimeout on an authenticated request means the vetted host may well have
+    received it, token included. What the skip means is that there is nothing to repair, and questions
+    already forecast are skipped on the next run, so retrying at the next slot is free while failing the
+    run would only raise an alarm over a blip (2026-10-02: a WAN reconnect broke DNS for one slot). The
     ``TRANSIENT_NETWORK_SKIP`` marker is what the Kira scheduler reads to count consecutive blips and
     escalate. See docs/telemetry_markers.md "TRANSIENT_NETWORK_SKIP".
     """
@@ -472,8 +487,8 @@ def main() -> None:
         forecast_reports = _run_forecasts(template_bot, run_mode, only_posts=only_posts)
     # Boundary: classify, then re-raise anything that is not a pure connectivity blip.
     except Exception as exc:  # HARNESS-SCAN-EXEMPT-broad-except  # re-raised below unless it is a network blip
-        if not is_transient_network_error(exc):
-            raise
+        if not is_transient_network_error(exc) or _llm_calls_booked():
+            raise  # not a blip, or a blip AFTER spend: the run failed and cost money, so it fails
         transient_fetch_error = exc
     finally:
         donated_below_floor = credit_telemetry.log_end_and_check_floor()

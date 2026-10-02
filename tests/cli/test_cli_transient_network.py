@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 import socket
+from collections.abc import Iterator
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,8 +19,17 @@ from urllib3.exceptions import MaxRetryError, NameResolutionError
 
 from metaculus_bot.api_preflight import ApiIdentityError, TransientNetworkError
 from metaculus_bot.cli import main as cli_main
+from metaculus_bot.credit_telemetry import reset_role_spend
 from scripts.telemetry.markers import parse_log_text
 from tests.cli_test_helpers import _cli_main_test_mode, _forecaster_class, asyncio_run_stub
+
+
+@pytest.fixture(autouse=True)
+def _clean_spend_ledger() -> Iterator[None]:
+    """The ledger is process-global, and the fetch stage reads it, so no earlier test may leave rows."""
+    reset_role_spend()
+    yield
+    reset_role_spend()
 
 
 def _dns_failure() -> requests.exceptions.ConnectionError:
@@ -113,3 +124,38 @@ class TestFetchBlip:
         with _cli_main_test_mode(alertable_count=0), failing_fetch, pytest.raises(type(exc)):
             cli_main()
         assert _markers(caplog) == []
+
+
+class TestAConnectionErrorAfterSpendIsNotASkip:
+    """The fetch stage may only be called a blip while nothing has been spent."""
+
+    def test_a_connection_error_after_a_booked_llm_call_fails_the_run(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.WARNING)
+        booked = patch("metaculus_bot.cli.role_spend_rows", return_value=[SimpleNamespace(calls=3)])
+        escaping = patch("metaculus_bot.cli.asyncio.run", _raise(_dns_failure()))
+        with (
+            _cli_main_test_mode(alertable_count=0),
+            booked,
+            escaping,
+            pytest.raises(requests.exceptions.ConnectionError),
+        ):
+            cli_main()
+        assert _markers(caplog) == [], "a run that spent money did not skip"
+
+    def test_zero_call_rows_do_not_count_as_spend(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.WARNING)
+        idle = patch("metaculus_bot.cli.role_spend_rows", return_value=[SimpleNamespace(calls=0)])
+        escaping = patch("metaculus_bot.cli.asyncio.run", _raise(_dns_failure()))
+        with _cli_main_test_mode(alertable_count=0), idle, escaping, pytest.raises(SystemExit) as exc_info:
+            cli_main()
+        assert exc_info.value.code == 0
+        assert [m["stage"] for m in _markers(caplog)] == ["fetch"]
+
+    def test_the_preflight_stage_is_unaffected_by_the_ledger(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The preflight runs before any model call, so it never consults the ledger."""
+        caplog.set_level(logging.WARNING)
+        booked = patch("metaculus_bot.cli.role_spend_rows", return_value=[SimpleNamespace(calls=9)])
+        blip = patch("metaculus_bot.cli.verify_metaculus_api_identity", side_effect=TransientNetworkError("no DNS"))
+        with _cli_main_test_mode(alertable_count=0, mode="tournament"), booked, blip, pytest.raises(SystemExit):
+            cli_main()
+        assert [m["stage"] for m in _markers(caplog)] == ["preflight"]
