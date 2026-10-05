@@ -152,7 +152,7 @@ _PAID_FORECASTER_SLOTS: list[tuple[str, dict[str, Any]]] = [
 #
 # These are PLAIN GeneralLlm instances, which _forecaster_slot already produces for them:
 # should_route_via_donated_key matches only openai/anthropic/google, so a nvidia or
-# thinkingmachines slug never touches the donated key. That is required, not incidental. Most
+# qwen slug never touches the donated key. That is required, not incidental. Most
 # ``:free`` variants are served by providers outside the donated key's allowed list, so routing
 # them through the wrapper earns a 404 "no allowed providers", a wasted fallback attempt and a
 # bumped alert counter (ablation/forecaster_lineup.py carries the same finding).
@@ -161,16 +161,25 @@ _PAID_FORECASTER_SLOTS: list[tuple[str, dict[str, Any]]] = [
 # harness's free lineup has rotted: minimax-m2.5:free and qwen3-next-80b-a3b-instruct:free are
 # both DELISTED from OpenRouter now, so that list could not simply be copied. All three below are
 # served, accept `reasoning`, and cap completions at or above REASONING_MODEL_CONFIG's 64k
-# (nemotron-ultra 65,536, inkling 262,144, nemotron-super 235,929).
+# (nemotron-ultra 65,536, qwen3.8-27b 235,929, nemotron-super 235,929).
+#
+# 2026-10-05: thinkingmachines/inkling:free was REMOVED. OpenRouter answers HTTP 403 "only available
+# on agentic harnesses" to every chat completion, so the slot failed on all 27 forecasts of the
+# first week on Kira (survivors 1/3 or 2/3, never 3/3, so the "median of three" was a median of one
+# or two) while its endpoint still reported 99.7% uptime: endpoint metadata cannot see a policy
+# block, only a live call can. qwen/qwen3.8-27b:free took the slot (a different vendor and provider
+# from the two NVIDIA slots). It was chosen from the model list and endpoint health only and had
+# NOT been called live when committed: one free call must confirm it forecasts before it is deployed.
 #
 # Honest limits, because this is a stopgap and not a roster: only nemotron-super has ever been
-# bake-off validated as a forecaster in this repo; free slugs are rate-limited at the upstream
-# provider and capped per day by OpenRouter; and two of the three are NVIDIA, so ensemble
-# diversity is thinner than the paid roster's. No effort kwarg on any of them, because none of
-# these efforts has been measured here. Turn the flag off the day credits land.
+# bake-off validated as a forecaster in this repo (nemotron-ultra times out on some questions);
+# free slugs are rate-limited at the upstream provider and capped per day by OpenRouter; and two of
+# the three are NVIDIA, so ensemble diversity is thinner than the paid roster's. No effort kwarg on
+# any of them, because none of these efforts has been measured here. Turn the flag off the day
+# credits land.
 _FREE_TIER_FORECASTER_SLOTS: list[tuple[str, dict[str, Any]]] = [
     ("openrouter/nvidia/nemotron-3-ultra-550b-a55b:free", {}),
-    ("openrouter/thinkingmachines/inkling:free", {}),
+    ("openrouter/qwen/qwen3.8-27b:free", {}),
     # The one free model this repo has actually bake-off validated as a forecaster.
     ("openrouter/nvidia/nemotron-3-super-120b-a12b:free", {}),
 ]

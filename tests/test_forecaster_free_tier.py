@@ -49,6 +49,21 @@ def test_flag_unset_or_false_builds_the_paid_roster(monkeypatch: pytest.MonkeyPa
     assert llm_configs._build_parser_llm().model == "openrouter/openai/gpt-6-luna"
 
 
+def test_the_free_roster_is_these_three_and_never_the_model_openrouter_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """thinkingmachines/inkling:free answered 403 "only available on agentic harnesses" on every call
+    (27 of 27 forecasts failed in week one), so the roster is pinned and that slug is named as banned."""
+    monkeypatch.setenv(FORECASTER_FREE_TIER_ENABLED_ENV, "true")
+    models = [llm.model for llm in llm_configs._build_forecaster_llms()]
+    assert models == [
+        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "openrouter/qwen/qwen3.8-27b:free",
+        "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+    ]
+    assert not any("inkling" in model for model in models)
+
+
 def test_free_tier_swaps_three_free_forecasters_off_the_donated_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(FORECASTER_FREE_TIER_ENABLED_ENV, "true")
     forecasters = llm_configs._build_forecaster_llms()

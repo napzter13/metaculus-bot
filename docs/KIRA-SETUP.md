@@ -95,8 +95,16 @@ better than the median (and worse on numeric questions).
 
 **What M4 spends.** On OpenRouter, nothing: the forecasters, the parser and every text-only support
 role run on `:free` models, and the paid research roles, the stacker and its helpers are off or
-gated off. This is read from the code and the env the scheduler builds; it has not yet been
-confirmed on a live run, because the first runs found no open questions (rc=0).
+gated off. Its OpenRouter spend is confirmed zero over the first week of live runs: all 51 completed
+model calls the bot booked (forecasters and parser) were charged $0, with no non-zero ledger row.
+
+**How good M4 really is.** Weaker than a median of three. In the first week only 1 or 2 of the 3 free
+forecasters answered each question, never all 3, and publishing needs just one (`MIN_FORECASTERS_TO_PUBLISH`
+is 1). One slot, `thinkingmachines/inkling:free`, was dead: OpenRouter refuses it with HTTP 403
+"only available on agentic harnesses" on every call. It was replaced on 2026-10-05 by
+`qwen/qwen3.8-27b:free`. The free `gemma` summarizer also hit an upstream rate limit on every forecast
+run and fell back to raw news articles. Both are why a paid grant improves forecast quality, not just
+speed.
 
 ## Step by step
 
@@ -369,6 +377,59 @@ MiniBench** (set `WORKFLOW_MINIBENCH_ENABLED=false` in `kira-secrets`).
 Check the balance on OpenRouter's key page (or `make check_credits` locally with the keys in
 `.env`). Divide the balance by the mode's price per question and compare it with the questions
 left.
+
+**What the first week showed about supply (read 2026-10-05).** The fall tournament has released far
+fewer questions than the 300 to 500 the tables above assume: its API reports 7 real questions in the
+first eight days (plus a practice question), each open for a 3 hour window, and the project's own
+count is 30 so far. Nothing has opened since 2026-10-01 14:00Z. At that pace a $100 grant in M3 or
+M2 lasts far longer than a season-volume estimate says, so size against the questions that actually
+arrive (`supply_probe` counts them, free), not against 300 to 500. MiniBench is lumpy instead: it
+released 23 questions on 2026-10-05 as a new two-week round opened, and none before.
+
+### The switch, ready to paste (do not apply before the key arrives)
+
+Run `ssh -tt kira kira-secrets`, pick `metaculus-bot`, and set exactly these. The program restarts
+itself and the next slot runs the new mode. Nothing else in the code or the config has to change.
+
+**About $100, mode M3** (paid forecasters, no paid research, MiniBench off):
+
+```
+OAI_ANTH_OPENROUTER_KEY=<the key Metaculus emails you>
+FORECASTER_FREE_TIER_ENABLED=false
+WORKFLOW_MINIBENCH_ENABLED=false
+```
+
+`SUPPORT_MODEL_ROUTE=free`, `GAP_FILL_ENABLED=false`, `GAP_FILL_V2_ENABLED=false`,
+`NATIVE_SEARCH_ENABLED=false`, `GEMINI_SEARCH_ENABLED=false` and `OPENROUTER_CREDIT_FLOOR_USD=15` are
+already the defaults, so they need no line.
+
+**$300 to $600, mode M2** (paid forecasters plus the main web research, MiniBench off):
+
+```
+OAI_ANTH_OPENROUTER_KEY=<the key Metaculus emails you>
+FORECASTER_FREE_TIER_ENABLED=false
+NATIVE_SEARCH_ENABLED=true
+GAP_FILL_V2_ENABLED=true
+WORKFLOW_MINIBENCH_ENABLED=false
+OPENROUTER_CREDIT_FLOOR_USD=30
+```
+
+M2 keeps `SUPPORT_MODEL_ROUTE=free` and `GAP_FILL_ENABLED=false` from the defaults. The floor goes up to
+30 because M2 costs about twice M3 per question, which keeps roughly the same warning time.
+
+**What to look for in the first run after the change** (`kira-earn logs metaculus-bot`, or the newest
+file under `runs/tournament/`):
+
+- `CREDIT_BALANCE: key=donated phase=start remaining=<dollars>` and again at `phase=end`. Today these
+  lines say `skipped (env var OAI_ANTH_OPENROUTER_KEY not set)`.
+- `CREDIT_SPEND: key=donated run_delta_usd=<n>` from the `limit_remaining` drop, and a
+  `CREDIT_FLOOR_BREACH` warning (and a red run) once the balance falls below the floor.
+- `base_forecasters(3)=['openrouter/openai/o3', 'openrouter/anthropic/claude-sonnet-4.5',
+  'openrouter/openai/gpt-5.6-sol']` and `FORECASTERS_SURVIVED ... survived=3/3` on a forecast question.
+
+The paid forecasters go to the donated key first and fall back to your personal `OPENROUTER_API_KEY`
+(still unfunded, so a fallback would fail rather than bill) on a credit or rate error. The parser and
+the AskNews summarizer stay on the free model because `SUPPORT_MODEL_ROUTE=free`.
 
 ### When the credits run out mid-season
 
