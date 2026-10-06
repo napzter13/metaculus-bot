@@ -487,10 +487,10 @@ The case is still weak:
   secrets; leave it that way.
 - **Mantic**: personal keys only, about $3 per question, and it ignores the mode flags; it stays
   idle without `MANTIC_TOKEN`.
-- **Market Pulse** (about $7k, bot-eligible): bots update forecasts on numeric group questions
-  throughout each question's life. Not supported. The repo has no run mode or workflow for it,
-  only a slug probe in `scripts/probe_slugs.py`, and continuous updating is a different loop from
-  this bot's forecast-once design. Adding it means a new mode and a new scheduler entry.
+- **Market Pulse** (about $7,500 a quarter, bot-eligible, spot scored): not built. The 26Q4 season opens
+  2026-10-10 with 12 groups of numeric questions. docs/market-pulse.md has the rules, who competes,
+  the expected value (about $7 a quarter at free-model quality), the build size (about 1,000 lines) and
+  the verdict: no build yet, a free anchor-only backtest first.
 
 ## Public-repo notes
 
