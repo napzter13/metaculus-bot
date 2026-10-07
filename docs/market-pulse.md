@@ -4,10 +4,11 @@ Written 2026-10-06 from first-hand reads of the Metaculus API (the bot's own tok
 the FutureEval pages. Nothing here is built. The live season is **Market Pulse Challenge 26Q4**
 (project 33131), which opens **2026-10-10 21:00Z** and has no questions yet.
 
-**Verdict: NO-GO to build now. GO for one free step first**: a $0 backtest of a model-free anchor on the
-resolved Q2 and Q3 groups (section 7). Numbers: free-model bot EV about $7 a quarter, a full-coverage
-average bot about $50, a strong paid bot about $100 for about $62 of credits, and a build of about
-1,000 lines.
+**Verdict: NO-GO to build now, and it stays NO-GO.** The agreed gate was a free backtest of a model-free
+anchor on the resolved Q2 and Q3 groups, with GO only if it beats the median bot. That backtest **cannot be
+run with the bot account** (section 8: it is shown no resolutions and no community forecasts), so the
+gate is unmet, not failed. Numbers: free-model bot EV about $7 a quarter, a full-coverage average bot
+about $50, a strong paid bot about $100 for about $62 of credits, and a build of about 1,000 lines.
 
 ## 1. Rules for the season that is live (26Q4)
 
@@ -30,6 +31,10 @@ average bot about $50, a strong paid bot about $100 for about $62 of credits, an
 Q3 read `spot_peer_tournament` and `include`. The Q4 description promises spot scoring and bot
 eligibility, so this looks unconfigured, not decided, but if `exclude_and_show` persists at launch bots
 would be shown and excluded from prizes, which makes the expected value zero.
+
+**Launch check log.** 2026-10-07 02:30Z: unchanged, still `peer_tournament`, `exclude_and_show`,
+`unlisted`, 0 questions, 0 forecasters (the season opens 2026-10-10 21:00Z). A one-shot re-check is
+scheduled for 2026-10-10 21:12Z; its result is appended here.
 
 ## 2. How scoring treats updating
 
@@ -118,13 +123,50 @@ About **1,000 lines, about half a day**; the logic is about 250 of them. The cre
 streak and the status fields come free from the shared paths. An optional research cache per group
 (six sub-questions share one topic) would cut research cost about 80% for another half day.
 
-**The free step:** the bot already has a model-free anchor (an empirical band from FRED and yfinance).
-For market quantities a model-free forecast centred on the market price may reach the prize band with
-no LLM at all, which would change the free-cost EV from about $7 to something worth building for. A
-backtest of that anchor on the resolved Q2 and Q3 groups, scored against the final leaderboards, costs
-$0 and about half a day, and turns the guess in section 6 into a number.
+**The free step** was a backtest of the bot's model-free anchor (an empirical band from FRED and yfinance)
+on the resolved Q2 and Q3 groups. For market quantities a forecast centred on the market price might
+reach the prize band with no LLM at all, which would change the free-cost EV from about $7 to something
+worth building for. It turned out the bot account cannot see the data to score it; section 8 has the
+evidence and the cheapest ways forward.
 
-## Sources (read 2026-10-06)
+## 8. The backtest: blocked by the account, 2026-10-07
+
+The backtest needed, for every resolved Q2 and Q3 sub-question, its resolution value, the crowd's
+forecast at the spot time (to approximate a peer score) and a way to compare the total with the final
+leaderboard. None of the three is available to the bot account.
+
+- **No resolutions.** All 65 Q2 and 68 Q3 sub-questions have `status: resolved` and `resolution: null`
+  in the API, in the list, post-detail and question-detail endpoints. Five recent resolved binary
+  questions elsewhere on the site read the same, so this is the account, not Market Pulse.
+- **No community forecast.** `aggregations.recency_weighted.history` and `latest` are empty for resolved
+  questions. The account is `is_bot: true` (`Chronic-bot`); the API appears to withhold resolutions and
+  community aggregates from bot accounts, presumably to prevent leakage into benchmarks.
+- **Leaderboards give totals only.** Each entry carries a score, a coverage count and a prize, not
+  per-question scores, so another entrant's per-question peer score cannot be rebuilt.
+- **Why the repo never hit this.** Its analysis reads `my_forecasts.score_data`, the platform's own
+  score for forecasts the bot itself made. The bot made none in Q2 or Q3, so it sees nothing there.
+- **Deriving the truth from market data was rejected.** The group description, resolution criteria and
+  fine print are empty in the API, so the exact definitions (which contract, which window) would be
+  guessed, and without the crowd the result still could not answer "beats the median bot".
+
+What the Q3 structure does say about an anchor-only bot: 48 of the 68 sub-questions are market series
+(five relative-return groups, the VIX maximum, the UST 10Y and the high-yield OAS). The other 20
+(8 EPS, 9 revenue, 3 NVIDIA guidance) need analyst consensus, which the anchor does not have. So an
+anchor-only entry covers at most about 71% of the questions. Coverage that low is not disqualifying
+(the lowest-coverage paid entry covered 29 of 67), but it caps the score.
+
+**Ways to unblock, cheapest first.**
+
+1. **A minimal live anchor-only entry in Q4**, no LLM, no ensemble (about 200 lines, $0), measured by the
+   account's own `score_data`. This is the only test that scores the real thing, and it does not need
+   anyone's permission. It is also the first slice of the full build, so it is not wasted.
+2. **Ask Metaculus for resolved-question and community data for the bot account.** The Resources page
+   links a "Metaculus Data Needs Form" for non-commercial data access ("we generally support research
+   efforts"). It is an owner action. With the data, the backtest is about half a day.
+3. **A human-tier API token** would show resolutions and crowds, but it is the owner's credential and an
+   owner decision; it is not something to hand over lightly.
+
+## Sources (read 2026-10-06 and 2026-10-07)
 
 - `GET /api/projects/tournaments/33131/` (26Q4), `/33066/` (26Q3), `/33013/` (26Q2): dates, prize pool,
   scoring type, bot status, counts, and the Q4 description with the spot-scoring and bot rules.

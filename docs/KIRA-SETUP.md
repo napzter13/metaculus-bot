@@ -490,7 +490,8 @@ The case is still weak:
 - **Market Pulse** (about $7,500 a quarter, bot-eligible, spot scored): not built. The 26Q4 season opens
   2026-10-10 with 12 groups of numeric questions. docs/market-pulse.md has the rules, who competes,
   the expected value (about $7 a quarter at free-model quality), the build size (about 1,000 lines) and
-  the verdict: no build yet, a free anchor-only backtest first.
+  the verdict: no build yet. The free anchor-only backtest that was meant to gate it cannot run
+  with a bot account (no resolutions are visible); the doc lists the ways to unblock it.
 
 ## Public-repo notes
 
